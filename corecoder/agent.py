@@ -16,6 +16,7 @@ from .context import ContextManager
 from .llm import LLM
 from .permissions import Permission
 from .prompt import PLAN_MODE_PROMPT, system_prompt
+from .rules import RuleLoader, RuleSnapshot
 from .tools import ALL_TOOLS
 from .tools.agent import AgentTool
 from .tools.base import Tool
@@ -32,12 +33,17 @@ class Agent:
         permission=None,
         hooks=None,
         workspace=None,
+        rules: RuleLoader | None = None,
+        inherited_rules: RuleSnapshot | None = None,
     ):
         self.llm = llm
         self.tools = tools if tools is not None else ALL_TOOLS
         self.permission = permission
         self.hooks = hooks
         self.workspace = workspace
+        self.rules = rules if rules is not None else RuleLoader.for_cwd()
+        self._inherited_rules = inherited_rules
+        self._active_rules: RuleSnapshot | None = None
         self._tool_by_name = {t.name: t for t in self.tools}
         self.messages: list[dict] = []
         self.context = ContextManager(max_tokens=max_context_tokens)
@@ -64,13 +70,16 @@ class Agent:
             rendered = self._todo.render()
             if rendered:
                 system += "\n\n# Current task list\n" + rendered
-        return [{"role": "system", "content": system}] + self.messages
+        snapshot = self._active_rules if self._active_rules is not None else self.rules.load()
+        rule_message = snapshot.message()
+        return [{"role": "system", "content": system}] + ([rule_message] if rule_message else []) + self.messages
 
     def _tool_schemas(self) -> list[dict]:
         return [t.schema() for t in self.tools]
 
     def chat(self, user_input: str, on_token=None, on_tool=None, on_reasoning=None) -> str:
         """Process one user message. May involve multiple LLM/tool rounds."""
+        self._active_rules = self._inherited_rules if self._inherited_rules is not None else self.rules.load()
         self.messages.append({"role": "user", "content": user_input})
         self.context.maybe_compress(self.messages, self.llm)
 
@@ -247,6 +256,7 @@ class Agent:
     def reset(self):
         """Clear conversation history."""
         self.messages.clear()
+        self._active_rules = None
         # a user-visible reset must not leak the dead conversation's checklist
         # into the next system prompt
         todo = self._tool_by_name.get("todo_write")

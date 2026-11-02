@@ -6,6 +6,7 @@ from pathlib import Path
 from .agent import Agent
 from .hooks import Hooks
 from .permissions import Permission
+from .rules import RuleLoader
 from .tasks import TaskManager
 from .tools import workspace_tools
 from .verify import discover, run
@@ -51,6 +52,7 @@ class TaskController:
                 ask=self.ask, persist_path=self.manager.tasks_dir / f"{task.id}.permissions.json"
             ),
             hooks=task_hooks, workspace=workspace,
+            rules=RuleLoader(Path(task.repo), Path(task.worktree)),
         )
         agent.messages = task.messages
         self.task, self.agent = task, agent

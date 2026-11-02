@@ -52,6 +52,8 @@ class AgentTool(Tool):
             permission=parent.permission,
             hooks=parent.hooks,
             workspace=parent.workspace,
+            rules=parent.rules,
+            inherited_rules=parent._active_rules,
         )
 
         # a sub-agent failure comes back as text, never propagates into the parent

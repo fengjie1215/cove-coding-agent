@@ -219,6 +219,12 @@ def _repl(agent: Agent, config: Config):
         if user_input == "/help":
             _show_help()
             continue
+        if user_input in ("/rules", "/rules show"):
+            _show_rules(current)
+            continue
+        if user_input.startswith("/rules "):
+            console.print("[yellow]Usage: /rules show[/yellow]")
+            continue
         if user_input == "/task" or user_input.startswith("/task "):
             try:
                 task_prompt = tasks.command(user_input)
@@ -436,6 +442,7 @@ def _show_help():
         "  /model <name>  Switch model mid-conversation\n"
         "  /tokens        Show token usage\n"
         "  /compact       Compress conversation context\n"
+        "  /rules show    Show active rules, sources, and precedence\n"
         "  /diff          Show files modified this session\n"
         "  /task start <requirement>  Start an isolated coding task\n"
         "  /task status|list|resume <id>|diff|verify|apply [--force]|leave|discard <id>\n"
@@ -452,6 +459,16 @@ def _show_help():
         title="CoreCoder Help",
         border_style="dim",
     ))
+
+
+def _show_rules(agent: Agent):
+    console.print("Rules: current request > project shared > personal project > global")
+    console.print("Built-in safety and tool permissions always apply.")
+    for source in reversed(agent.rules.load().sources):
+        status = source.error or ("active" if source.content else "empty or missing")
+        console.print(f"{source.scope}: {source.path} [{status}]", markup=False)
+        if source.content:
+            console.print(source.content, markup=False)
 
 
 def _brief(kwargs: dict, maxlen: int = 80) -> str:
