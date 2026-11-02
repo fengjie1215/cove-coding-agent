@@ -2,6 +2,7 @@
 
 import argparse
 import os
+import sqlite3
 import sys
 
 from prompt_toolkit import prompt as pt_prompt
@@ -17,6 +18,7 @@ from .config import Config
 from .hooks import load_hooks
 from .llm import LLM, LiteLLM
 from .mcp import load_mcp_tools
+from .rules import project_id
 from .permissions import DEFAULT_STORE, Permission
 from .session import list_sessions, load_session, save_session
 from .task_cli import TaskController
@@ -161,6 +163,8 @@ def _run_once(agent: Agent, prompt: str):
         # one-shot mode: print whatever went wrong and exit non-zero
         console.print(f"\n[red]Error: {e}[/red]")
         sys.exit(1)
+    if agent.memory_error:
+        err_console.print(f"[yellow]Memory retrieval skipped: {agent.memory_error}[/yellow]")
     print()
 
 
@@ -224,6 +228,12 @@ def _repl(agent: Agent, config: Config):
             continue
         if user_input.startswith("/rules "):
             console.print("[yellow]Usage: /rules show[/yellow]")
+            continue
+        if user_input == "/memory" or user_input.startswith("/memory "):
+            try:
+                _memory_command(current, user_input[7:].strip(), pt_prompt)
+            except (ValueError, OSError, sqlite3.Error) as e:
+                console.print(f"[red]Memory error: {e}[/red]")
             continue
         if user_input == "/task" or user_input.startswith("/task "):
             try:
@@ -364,6 +374,8 @@ def _repl(agent: Agent, config: Config):
             before = tasks.manager.digest(tasks.task) if tasks.task else None
             response = current.chat(user_input, on_token=on_token, on_tool=on_tool,
                                     on_reasoning=on_reasoning)
+            if current.memory_error:
+                console.print(f"[yellow]Memory retrieval skipped: {current.memory_error}[/yellow]")
             if streamed:
                 print()  # newline after streamed tokens
             else:
@@ -396,6 +408,8 @@ def _display_chat(agent: Agent, message: str):
         console.print(f"\n[dim]> {name}({_brief(kwargs)})[/dim]")
 
     result = agent.chat(message, on_token=on_token, on_tool=on_tool)
+    if agent.memory_error:
+        console.print(f"[yellow]Memory retrieval skipped: {agent.memory_error}[/yellow]")
     if streamed:
         print()
     else:
@@ -443,6 +457,8 @@ def _show_help():
         "  /tokens        Show token usage\n"
         "  /compact       Compress conversation context\n"
         "  /rules show    Show active rules, sources, and precedence\n"
+        "  /memory add [--global] <text>  Save a manual memory (project by default)\n"
+        "  /memory list [--project|--global]|show <id>|search <query>|why|forget <id>\n"
         "  /diff          Show files modified this session\n"
         "  /task start <requirement>  Start an isolated coding task\n"
         "  /task status|list|resume <id>|diff|verify|apply [--force]|leave|discard <id>\n"
@@ -469,6 +485,95 @@ def _show_rules(agent: Agent):
         console.print(f"{source.scope}: {source.path} [{status}]", markup=False)
         if source.content:
             console.print(source.content, markup=False)
+
+
+def _memory_command(agent: Agent, arg: str, prompt):
+    """Manage user-authored memories; model tools cannot write this store."""
+    action, _, value = arg.partition(" ")
+    value = value.strip()
+    store = agent.memory_store
+    identity = project_id(agent.rules.identity_root)
+
+    def confirmed(question: str) -> bool:
+        try:
+            return prompt(question).strip().lower() in ("y", "yes")
+        except (EOFError, KeyboardInterrupt):
+            return False
+
+    if agent.plan_mode and action in ("add", "forget"):
+        raise ValueError("Memory changes are disabled in plan mode.")
+
+    if action == "add":
+        scope = "project"
+        if value.startswith("--global "):
+            scope, value = "global", value[len("--global "):].strip()
+        elif value.startswith("--project "):
+            value = value[len("--project "):].strip()
+        if not value or value.startswith("--"):
+            raise ValueError("Usage: /memory add [--global] <text>")
+        if scope == "global" and not confirmed("Save this memory for every project? [y/N] "):
+            console.print("[dim]Cancelled.[/dim]")
+            return
+        entry = store.add(value, scope, identity)
+        console.print(f"[green]Saved {entry.scope} memory {entry.id}.[/green]")
+        return
+
+    if action == "list" and value in ("", "--project", "--global"):
+        scope = value.removeprefix("--") if value else None
+        entries = store.list_entries(identity, scope)
+        if not entries:
+            console.print("[dim]No memories in this scope.[/dim]")
+        for entry in entries:
+            preview = entry.content.replace("\n", " ")[:100]
+            console.print(f"{entry.id}  {entry.scope:7}  {preview}", markup=False)
+        return
+
+    if action == "show" and value:
+        entry = store.get(value, identity)
+        if entry is None:
+            console.print("[yellow]Memory not found in this project.[/yellow]")
+            return
+        console.print(f"{entry.id} ({entry.scope}, created {entry.created_at})", markup=False)
+        console.print(entry.content, markup=False)
+        return
+
+    if action == "search" and value:
+        hits = store.search(value, identity, limit=10).hits
+        if not hits:
+            console.print("[dim]No matching memories.[/dim]")
+        for hit in hits:
+            preview = hit.entry.content.replace("\n", " ")[:100]
+            console.print(f"{hit.entry.id}  {hit.entry.scope:7}  score={hit.score:.2f}  {preview}", markup=False)
+        return
+
+    if action == "why" and not value:
+        if agent.memory_error:
+            console.print(f"[yellow]Last retrieval failed: {agent.memory_error}[/yellow]")
+        elif not agent.last_memories.hits:
+            console.print("[dim]No memory was injected in the last turn.[/dim]")
+        else:
+            console.print("Memories injected in the last turn:")
+            for hit in agent.last_memories.hits:
+                console.print(f"{hit.entry.id}  {hit.entry.scope}  score={hit.score:.2f}", markup=False)
+        return
+
+    if action == "forget" and value:
+        entry = store.get(value, identity)
+        if entry is None:
+            console.print("[yellow]Memory not found in this project.[/yellow]")
+            return
+        console.print(f"Delete {entry.scope} memory {entry.id}: {entry.content[:100]}", markup=False)
+        if not confirmed("Delete this memory? [y/N] "):
+            console.print("[dim]Cancelled.[/dim]")
+            return
+        store.forget(value, identity)
+        console.print(f"[green]Deleted memory {value}.[/green]")
+        return
+
+    console.print(
+        "[yellow]Usage: /memory add [--global] <text>|list [--project|--global]|"
+        "show <id>|search <query>|why|forget <id>[/yellow]"
+    )
 
 
 def _brief(kwargs: dict, maxlen: int = 80) -> str:

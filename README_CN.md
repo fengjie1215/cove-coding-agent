@@ -12,7 +12,7 @@
 [![Python](https://img.shields.io/badge/python-3.10+-blue)](https://python.org)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Tests](https://github.com/he-yufeng/CoreCoder/actions/workflows/ci.yml/badge.svg)](https://github.com/he-yufeng/CoreCoder/actions)
-[![engine](https://img.shields.io/badge/engine-1400_LoC-blue)](article/)
+[![engine](https://img.shields.io/badge/engine-1428_LoC-blue)](article/)
 [![源码导读](https://img.shields.io/badge/源码导读-8篇双语-orange)](article/)
 
 </div>
@@ -25,7 +25,7 @@
 
 | | CoreCoder | Claude Code | aider | nanoGPT |
 |---|---|---|---|---|
-| 代码量 | 引擎约 1400 行 / 整包 3743 行 | 几十万行（闭源） | 数万行 Python | 约 600 行（两个文件） |
+| 代码量 | 引擎 1428 行 / 整包 4130 行 | 几十万行（闭源） | 数万行 Python | 约 600 行（两个文件） |
 | 读完要多久 | 一个下午 | 读不了（闭源） | 得啃几天 | 一个下午 |
 | 能不能下断点改了再跑 | 能，每一行 | 不能 | 能，但量大 | 能 |
 | 定位 | 读懂并 fork 出你自己的 agent | 生产级编程助手 | 终端结对编程 | 教学用最小 GPT |
@@ -36,7 +36,7 @@ nanoGPT 那一列是拿来对照的：它最小、可读，但教的是训一个
 
 我一直觉得 coding agent 被讲得太玄了。把 Claude Code、Cursor 这类工具扒到底，核心是一个 while 循环套着一个大模型，外加七八个让它能真正动手的工具。难的从来不是这个循环，而是循环跑进真实世界以后要兜的那些底。CoreCoder 就是把这个核心老老实实写出来的最小版本。
 
-引擎部分（循环、模型接口、上下文、工具、会话）去掉空行和注释是 1400 行。加入任务隔离、验证和分层规则后，整包 30 个文件、物理 3743 行、净 3110 行。新增工作流见下文。
+引擎部分（循环、模型接口、上下文、工具、会话）去掉空行和注释是 1428 行。加入任务隔离、验证、分层规则和手动记忆后，整包 31 个文件、物理 4130 行、净 3455 行。新增工作流见下文。
 
 它真能跑：读写文件、执行 shell、派子 agent、分三层压上下文，还能随时把这趟烧掉的 token 和美元数报给你。任何要动你磁盘、要跑命令的调用，都会先停下来等你点头。这份「注释」背后有真实可运行的实现。
 
@@ -87,7 +87,7 @@ corecoder -p "给 parse_config() 加错误处理"   # 一次性模式，干完�
 
 ```
 corecoder/
-├── agent.py        agent 主循环 + 并行工具执行       264 行   ← 从这里开始读
+├── agent.py        agent 主循环 + 并行工具执行       290 行   ← 从这里开始读
 ├── llm.py          流式客户端 + 重试 + 成本统计       349 行
 ├── context.py      三层上下文压缩                     220 行
 ├── session.py      会话存盘 / 续聊 + 路径穿越防护      97 行
@@ -96,8 +96,9 @@ corecoder/
 ├── shell.py        POSIX shell 路由（Windows 走 Git Bash） 61 行
 ├── mcp.py          MCP stdio 客户端，接外部工具       237 行
 ├── prompt.py       系统提示词                          41 行
-├── rules.py        分层用户与项目规则                    91 行
-├── cli.py          REPL + 斜杠命令 + 一次性模式        476 行
+├── rules.py        分层用户与项目规则                    96 行
+├── memory.py       手动记忆与本地检索                   248 行
+├── cli.py          REPL + 斜杠命令 + 一次性模式        581 行
 ├── config.py       环境变量配置                        55 行
 ├── checkpoints.py  /undo 快照与回滚                      93 行
 ├── demo.py         离线端到端演示                       101 行
@@ -109,7 +110,7 @@ corecoder/
     ├── read.py       文件读取                           56 行
     ├── write.py      文件写入                           46 行
     ├── todo.py       agent 自维护的任务清单             79 行
-    ├── agent.py      子 agent 派生                      75 行
+    ├── agent.py      子 agent 派生                      77 行
     └── base.py       工具基类                           32 行
 examples/
 └── plan_hooks_demo.py  离线 plan mode + hooks 演示（免 API key）
@@ -197,6 +198,8 @@ README 只给方向，每条的代码细节第七篇接着讲。挑一个动手�
 /tokens          查看 token 用量和费用估算
 /diff            查看本次会话改过的文件
 /rules show      查看生效规则及来源文件
+/memory add [--global] <内容>  保存项目或全局记忆
+/memory list [--project|--global]|show <id>|search <查询>|why|forget <id>
 /task start <需求>  创建隔离的编码任务
 /task status|list|resume <id>|diff|verify|apply [--force]|leave|discard <id>
 /undo            撤销最近一次文件改动
@@ -221,6 +224,12 @@ Worktree 只隔离 Git 文件改动，**不是安全沙箱**：Shell 和外部 M
 可选的 Markdown 规则按优先级从低到高读取：`~/.corecoder/rules.md`（全局个人偏好）、`~/.corecoder/projects/<project-id>/rules.md`（此项目的个人规则）、仓库根目录的 `AGENTS.md`（项目共享规则）。执行 `/rules show` 可查看准确路径、内容和读取错误；任务模式中也能使用。个人项目规则按**原仓库路径**识别，因此同一项目的各个任务 Worktree 共用；项目共享规则则从任务 Worktree 中读取，不从原工作区读取；要让任务用到它，需先把 `AGENTS.md` 提交进 Git。
 
 每次用户发起新一轮对话时重新加载规则，当前轮的多个工具调用使用同一份快照。规则文件须为 UTF-8、非符号链接的普通文件，单个文件最多 8 KiB。用户本轮的明确要求优先于文件规则，具体项目规则优先于通用偏好。规则只是提示词上下文，**不是权限策略**：不能放开工具授权、关闭计划模式或绕过任务验证与应用检查；规则文本也不会存入会话历史。
+
+## 手动记忆与检索
+
+用 `/memory add <内容>` 保存当前项目的事实或决策；`/memory add --global <内容>` 保存跨项目记忆时会再次确认。`/memory list`、`/memory show <id>`、`/memory search <查询>` 用于查看和检索，`/memory forget <id>` 确认后删除，`/memory why` 显示上一轮实际选中的记忆。行为约束应写在分层规则里，记忆只存事实；不要保存 API Key 等秘密。
+
+记忆独立保存在 `~/.corecoder/memory.sqlite3`，不进入 Git Worktree 或会话存档。每轮开始时在本地检索全局和当前项目记忆，最多注入三条相关结果，并限制总上下文长度。任务 Worktree 复用原仓库的项目身份，子 Agent 继承父 Agent 当轮的检索快照。`-p` 模式也能读取记忆，但只有交互命令能写入。记忆只是参考上下文，不授予工具权限，也不高于本轮要求和规则；若回答令人意外，可用 `/memory why` 核对来源。
 
 会话 ID 会先清洗成安全字符再拿去当文件名，存档统统落在 `~/.corecoder/sessions` 里，恶意会话名穿越不出去。undo 历史也一样落盘：快照写在 `~/.corecoder/checkpoints.json`，重启之后 `/undo` 照样能往回撤。`/tokens` 的费用估算读的是内置价目表，在 `~/.corecoder/pricing.json` 里写自己的价格就会盖掉对应条目，新模型、调价都不用等发版。
 
@@ -299,7 +308,7 @@ REPL 里 `/plan` 开关计划模式。开着的时候，提示符变成 `(plan)`
 
 ## 贡献 / License
 
-动手之前先跑一遍 `pytest tests/ -q`（227 个测试）、`ruff check` 和 `compileall`，绿了再提。MIT License，欢迎 fork 拿去造更好的东西，能在 README 里留一句出处就更好。
+动手之前先跑一遍 `pytest tests/ -q`、`ruff check` 和 `compileall`，绿了再提。MIT License，欢迎 fork 拿去造更好的东西，能在 README 里留一句出处就更好。
 
 ---
 

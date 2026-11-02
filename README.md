@@ -12,7 +12,7 @@
 [![Python](https://img.shields.io/badge/python-3.10+-blue)](https://python.org)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Tests](https://github.com/he-yufeng/CoreCoder/actions/workflows/ci.yml/badge.svg)](https://github.com/he-yufeng/CoreCoder/actions)
-[![engine](https://img.shields.io/badge/engine-1400_LoC-blue)](article/00-index_EN.md)
+[![engine](https://img.shields.io/badge/engine-1428_LoC-blue)](article/00-index_EN.md)
 [![essays](https://img.shields.io/badge/source--reading-8_bilingual-orange)](article/00-index_EN.md)
 
 </div>
@@ -25,7 +25,7 @@
 
 | | CoreCoder | Claude Code | aider | nanoGPT |
 |---|---|---|---|---|
-| Lines of code | ~1,400 engine / 3,743 total | hundreds of thousands (closed) | tens of thousands of Python | ~600 (two files) |
+| Lines of code | 1,428 engine / 4,130 total | hundreds of thousands (closed) | tens of thousands of Python | ~600 (two files) |
 | Time to read it all | one afternoon | can't (closed) | a few days of slogging | one afternoon |
 | Breakpoint, change, rerun? | yes, every line | no | yes, but there's a lot | yes |
 | What it's for | understand one, then fork your own | production coding assistant | terminal pair-programming | minimal GPT for teaching |
@@ -36,7 +36,7 @@ The nanoGPT column is there as a reference point: minimal, readable, but it teac
 
 I've always felt coding agents get talked about as if they were arcane. Strip a tool like Claude Code or Cursor all the way down and the core is a `while` loop wrapped around a large model, plus seven or eight tools that let it actually do things. The hard part was never the loop; it's everything the loop has to cope with once it meets the real world. CoreCoder is the minimal version that writes that core out honestly.
 
-The engine (loop, model interface, context, tools, sessions) is 1,400 lines once you drop blank lines and comments. With task isolation, validation and layered rules, the package is 30 files: 3,743 physical lines, 3,110 net. The extra workflows are documented below.
+The engine (loop, model interface, context, tools, sessions) is 1,428 lines once you drop blank lines and comments. With task isolation, validation, layered rules and manual memory, the package is 31 files: 4,130 physical lines, 3,455 net. The extra workflows are documented below.
 
 And it really runs: reads and writes files, executes shell, spawns sub-agents, compacts context in three tiers, and tells you the tokens and dollars a run burned whenever you ask. Anything that would mutate your disk or run a command stops for your consent first. The point of it running is to keep the walkthrough grounded in working code.
 
@@ -87,7 +87,7 @@ Laid out flat, the whole project is this big. Skim it before you clone and you'l
 
 ```
 corecoder/
-├── agent.py        agent loop + parallel tool exec       264 lines   ← start here
+├── agent.py        agent loop + parallel tool exec       290 lines   ← start here
 ├── llm.py          streaming client + retry + cost        349 lines
 ├── context.py      three-tier context compaction          220 lines
 ├── session.py      save / resume + path-traversal guard    97 lines
@@ -96,8 +96,9 @@ corecoder/
 ├── shell.py        POSIX shell routing (Git Bash on Windows) 61 lines
 ├── mcp.py          MCP stdio client for external tools    237 lines
 ├── prompt.py       system prompt                           41 lines
-├── rules.py        layered user and project rules          91 lines
-├── cli.py          REPL + slash commands + one-shot       476 lines
+├── rules.py        layered user and project rules          96 lines
+├── memory.py       explicit memory + local retrieval      248 lines
+├── cli.py          REPL + slash commands + one-shot       581 lines
 ├── config.py       env-var config                          55 lines
 ├── checkpoints.py  /undo snapshot and restore               93 lines
 ├── demo.py         offline end-to-end demo                 101 lines
@@ -109,7 +110,7 @@ corecoder/
     ├── read.py       file read                             56 lines
     ├── write.py      file write                            46 lines
     ├── todo.py       agent-maintained task checklist       79 lines
-    ├── agent.py      sub-agent spawning                    75 lines
+    ├── agent.py      sub-agent spawning                    77 lines
     └── base.py       tool base class                       32 lines
 examples/
 └── plan_hooks_demo.py  offline plan mode + hooks demo (no API key)
@@ -197,6 +198,8 @@ Inside the REPL, `/help` lists everything; these are the ones you'll reach for:
 /tokens          token usage and cost estimate
 /diff            files changed this session
 /rules show      show active rules and their source files
+/memory add [--global] <text>  save a project or global memory
+/memory list [--project|--global]|show <id>|search <query>|why|forget <id>
 /task start <request>  start an isolated coding task
 /task status|list|resume <id>|diff|verify|apply [--force]|leave|discard <id>
 /undo            revert the most recent file change
@@ -221,6 +224,12 @@ Worktrees isolate Git changes, **not execution**. Shell commands and external MC
 CoreCoder loads optional plain-text Markdown rules from three places, in increasing priority: `~/.corecoder/rules.md` (global preferences), `~/.corecoder/projects/<project-id>/rules.md` (private preferences for this project), and the repository-root `AGENTS.md` (shared project rules). Run `/rules show` to see the exact paths, contents and any loading errors; it works inside a task too. The private project ID is derived from the original repository path, so all its task worktrees use the same private rules. The shared `AGENTS.md` is read from the task worktree, not the original checkout; commit it to Git if tasks should use it.
 
 Rules reload at the start of each user turn and stay fixed through that turn's tool calls. Each file must be UTF-8, a regular non-symlink file, and at most 8 KiB. A current explicit user request takes precedence over these rules; more specific rules take precedence over broader ones. Rules are advisory prompt context, **not security policy**: they cannot grant tool permissions, disable plan mode or bypass the task validation and apply checks. Rule text is not saved into conversation history.
+
+## Manual memory and retrieval
+
+Use `/memory add <note>` to save a fact or decision for the current project, or `/memory add --global <note>` for all projects (with confirmation). `/memory list`, `/memory show <id>`, and `/memory search <query>` inspect the local store; `/memory forget <id>` confirms before deleting a note. `/memory why` shows which notes were selected for the last turn. Keep behavior instructions in layered rules and facts in memory; do not store API keys or other secrets.
+
+Notes live in `~/.corecoder/memory.sqlite3`, outside Git worktrees and saved chats. At each turn, CoreCoder searches global and current-project notes locally and injects up to three relevant results within a fixed context budget. The same original-project identity is used inside a task worktree, and a sub-agent receives the parent turn's snapshot. Retrieval also works in one-shot mode, but writing memories requires an explicit interactive command. Memory text is advisory, never a tool permission or a substitute for the current request and rules; a model may still misinterpret it, so inspect `/memory why` when an answer is surprising.
 
 Session IDs are sanitized to safe characters before they become filenames, every archive lands under `~/.corecoder/sessions`, and a malicious session name can't traverse out. Undo history persists the same way: checkpoints land in `~/.corecoder/checkpoints.json`, so `/undo` still reaches back after a restart. The cost estimate behind `/tokens` reads a built-in price table, and `~/.corecoder/pricing.json` overrides any entry in it, so a new model or a moved price lands without waiting for a release.
 

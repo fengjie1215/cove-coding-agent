@@ -11,12 +11,14 @@ which means it's done working and ready to report back.
 
 import concurrent.futures
 import inspect
+import sqlite3
 
 from .context import ContextManager
 from .llm import LLM
+from .memory import MemorySnapshot, MemoryStore
 from .permissions import Permission
 from .prompt import PLAN_MODE_PROMPT, system_prompt
-from .rules import RuleLoader, RuleSnapshot
+from .rules import RuleLoader, RuleSnapshot, project_id
 from .tools import ALL_TOOLS
 from .tools.agent import AgentTool
 from .tools.base import Tool
@@ -35,6 +37,8 @@ class Agent:
         workspace=None,
         rules: RuleLoader | None = None,
         inherited_rules: RuleSnapshot | None = None,
+        memory_store: MemoryStore | None = None,
+        inherited_memories: MemorySnapshot | None = None,
     ):
         self.llm = llm
         self.tools = tools if tools is not None else ALL_TOOLS
@@ -44,6 +48,11 @@ class Agent:
         self.rules = rules if rules is not None else RuleLoader.for_cwd()
         self._inherited_rules = inherited_rules
         self._active_rules: RuleSnapshot | None = None
+        self.memory_store = memory_store if memory_store is not None else MemoryStore()
+        self._inherited_memories = inherited_memories
+        self._active_memories: MemorySnapshot | None = None
+        self.last_memories = MemorySnapshot()
+        self.memory_error: str | None = None
         self._tool_by_name = {t.name: t for t in self.tools}
         self.messages: list[dict] = []
         self.context = ContextManager(max_tokens=max_context_tokens)
@@ -72,7 +81,11 @@ class Agent:
                 system += "\n\n# Current task list\n" + rendered
         snapshot = self._active_rules if self._active_rules is not None else self.rules.load()
         rule_message = snapshot.message()
-        return [{"role": "system", "content": system}] + ([rule_message] if rule_message else []) + self.messages
+        memory_message = self._active_memories.message() if self._active_memories is not None else None
+        return ([{"role": "system", "content": system}]
+                + ([memory_message] if memory_message else [])
+                + ([rule_message] if rule_message else [])
+                + self.messages)
 
     def _tool_schemas(self) -> list[dict]:
         return [t.schema() for t in self.tools]
@@ -80,6 +93,16 @@ class Agent:
     def chat(self, user_input: str, on_token=None, on_tool=None, on_reasoning=None) -> str:
         """Process one user message. May involve multiple LLM/tool rounds."""
         self._active_rules = self._inherited_rules if self._inherited_rules is not None else self.rules.load()
+        self.memory_error = None
+        if self._inherited_memories is not None:
+            self._active_memories = self._inherited_memories
+        else:
+            try:
+                self._active_memories = self.memory_store.search(user_input, project_id(self.rules.identity_root))
+            except (OSError, sqlite3.Error) as exc:
+                self._active_memories = MemorySnapshot()
+                self.memory_error = f"{type(exc).__name__}: {exc}"
+        self.last_memories = self._active_memories
         self.messages.append({"role": "user", "content": user_input})
         self.context.maybe_compress(self.messages, self.llm)
 
@@ -257,6 +280,9 @@ class Agent:
         """Clear conversation history."""
         self.messages.clear()
         self._active_rules = None
+        self._active_memories = None
+        self.last_memories = MemorySnapshot()
+        self.memory_error = None
         # a user-visible reset must not leak the dead conversation's checklist
         # into the next system prompt
         todo = self._tool_by_name.get("todo_write")

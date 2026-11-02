@@ -22,6 +22,12 @@ def project_root(cwd: Path) -> Path:
     return cwd
 
 
+def project_id(identity_root: Path) -> str:
+    """Stable local project key, shared by rules and memories."""
+    identity = os.path.normcase(str(identity_root.resolve()))
+    return hashlib.sha256(identity.encode("utf-8")).hexdigest()[:16]
+
+
 @dataclass(frozen=True)
 class RuleSource:
     scope: str
@@ -57,11 +63,10 @@ class RuleLoader:
         self.identity_root = identity_root.resolve()
         self.content_root = (content_root or identity_root).resolve()
         self.home = (home or Path.home()).resolve()
-        identity = os.path.normcase(str(self.identity_root))
-        project_id = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:16]
+        identity_id = project_id(self.identity_root)
         self.paths = (
             ("global", self.home / ".corecoder" / "rules.md"),
-            ("personal project", self.home / ".corecoder" / "projects" / project_id / "rules.md"),
+            ("personal project", self.home / ".corecoder" / "projects" / identity_id / "rules.md"),
             ("project shared", self.content_root / "AGENTS.md"),
         )
 

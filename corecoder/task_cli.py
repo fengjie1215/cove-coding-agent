@@ -53,6 +53,7 @@ class TaskController:
             ),
             hooks=task_hooks, workspace=workspace,
             rules=RuleLoader(Path(task.repo), Path(task.worktree)),
+            memory_store=getattr(self.ordinary, "memory_store", None),
         )
         agent.messages = task.messages
         self.task, self.agent = task, agent
