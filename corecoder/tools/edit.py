@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import ClassVar
 
 from ..checkpoints import record as _record_checkpoint
+from ..workspace import Workspace
 from .base import Tool
 
 # track files changed this session for /diff
@@ -18,6 +19,9 @@ _changed_files: set[str] = set()
 
 
 class EditFileTool(Tool):
+    def __init__(self, workspace: Workspace | None = None):
+        self.workspace = workspace
+
     name = "edit_file"
     description = (
         "Edit a file by replacing an exact string match. "
@@ -48,7 +52,7 @@ class EditFileTool(Tool):
 
         try:
             with FILE_MUTATION_LOCK:
-                p = Path(file_path).expanduser().resolve()
+                p = self.workspace.resolve(file_path) if self.workspace else Path(file_path).expanduser().resolve()
                 if not p.exists():
                     return f"Error: {file_path} not found"
 
@@ -71,9 +75,12 @@ class EditFileTool(Tool):
                     )
 
                 new_content = content.replace(old_string, new_string, 1)
-                _record_checkpoint(p)
+                if self.workspace:
+                    self.workspace.checkpoints.record(p)
+                else:
+                    _record_checkpoint(p)
                 p.write_text(new_content, encoding="utf-8")
-                _changed_files.add(str(p))
+                (self.workspace.changed_files if self.workspace else _changed_files).add(str(p))
 
             # generate a unified diff so the user/LLM can see exactly what changed
             diff = _unified_diff(content, new_content, str(p))

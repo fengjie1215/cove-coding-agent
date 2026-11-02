@@ -20,3 +20,12 @@ ALL_TOOLS = [
     AgentTool(),
 ]
 
+
+def workspace_tools(workspace):
+    """Fresh tool instances bound to a single task worktree."""
+    return [
+        BashTool(workspace), ReadFileTool(workspace), WriteFileTool(workspace),
+        EditFileTool(workspace), GlobTool(workspace), GrepTool(workspace),
+        TodoWriteTool(), AgentTool(),
+    ]
+

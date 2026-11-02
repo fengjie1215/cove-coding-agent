@@ -19,6 +19,7 @@ from .llm import LLM, LiteLLM
 from .mcp import load_mcp_tools
 from .permissions import DEFAULT_STORE, Permission
 from .session import list_sessions, load_session, save_session
+from .task_cli import TaskController
 from .tools import ALL_TOOLS
 
 console = Console()
@@ -185,6 +186,7 @@ def _repl(agent: Agent, config: Config):
 
     # Enter submits, Escape+Enter inserts a newline (for pasting code blocks etc.)
     kb = KeyBindings()
+    tasks = TaskController(agent, console, _ask_permission, pt_prompt)
 
     @kb.add("enter")
     def _submit(event):
@@ -195,9 +197,10 @@ def _repl(agent: Agent, config: Config):
         event.current_buffer.insert_text("\n")
 
     while True:
+        current = tasks.agent or agent
         try:
             user_input = pt_prompt(
-                "You (plan) > " if agent.plan_mode else "You > ",
+                f"You (task {tasks.task.id}) > " if tasks.task else ("You (plan) > " if current.plan_mode else "You > "),
                 history=history,
                 multiline=True,
                 key_bindings=kb,
@@ -216,13 +219,34 @@ def _repl(agent: Agent, config: Config):
         if user_input == "/help":
             _show_help()
             continue
+        if user_input == "/task" or user_input.startswith("/task "):
+            try:
+                task_prompt = tasks.command(user_input)
+                if task_prompt:
+                    before = tasks.manager.digest(tasks.task)
+                    _display_chat(tasks.agent, task_prompt)
+                    tasks.after_chat(before, _display_chat)
+            except KeyboardInterrupt:
+                if tasks.task:
+                    tasks.task.messages = tasks.agent.messages
+                    tasks.task.save(tasks.manager.tasks_dir)
+                console.print("\n[yellow]Interrupted.[/yellow]")
+            except Exception as e:  # noqa: BLE001
+                if tasks.task:
+                    tasks.task.messages = tasks.agent.messages
+                    tasks.task.save(tasks.manager.tasks_dir)
+                console.print(f"[red]Task error: {e}[/red]")
+            continue
         if user_input == "/reset":
-            agent.reset()
+            current.reset()
+            if tasks.task:
+                tasks.task.messages = current.messages
+                tasks.task.save(tasks.manager.tasks_dir)
             console.print("[yellow]Conversation reset.[/yellow]")
             continue
         if user_input == "/plan":
-            agent.plan_mode = not agent.plan_mode
-            if agent.plan_mode:
+            current.plan_mode = not current.plan_mode
+            if current.plan_mode:
                 console.print(
                     "[yellow]Plan mode on.[/yellow] The agent can look but not touch: it will "
                     "investigate read-only and present a plan. Type [bold]approve[/bold] to "
@@ -231,8 +255,8 @@ def _repl(agent: Agent, config: Config):
             else:
                 console.print("[yellow]Plan mode off.[/yellow]")
             continue
-        if agent.plan_mode and user_input.lower() in ("approve", "/approve"):
-            agent.plan_mode = False
+        if current.plan_mode and user_input.lower() in ("approve", "/approve"):
+            current.plan_mode = False
             console.print("[yellow]Plan mode off.[/yellow]")
             user_input = "approve"  # the approval itself goes to the model, which then executes
         if user_input == "/tokens":
@@ -255,20 +279,28 @@ def _repl(agent: Agent, config: Config):
             continue
         if user_input == "/compact":
             from .context import estimate_tokens
-            before = estimate_tokens(agent.messages)
-            compressed = agent.context.maybe_compress(agent.messages, agent.llm)
-            after = estimate_tokens(agent.messages)
+            before = estimate_tokens(current.messages)
+            compressed = current.context.maybe_compress(current.messages, current.llm)
+            after = estimate_tokens(current.messages)
             if compressed:
-                console.print(f"[green]Compressed: {before} → {after} tokens ({len(agent.messages)} messages)[/green]")
+                console.print(f"[green]Compressed: {before} → {after} tokens ({len(current.messages)} messages)[/green]")
             else:
-                console.print(f"[dim]Nothing to compress ({before} tokens, {len(agent.messages)} messages)[/dim]")
+                console.print(f"[dim]Nothing to compress ({before} tokens, {len(current.messages)} messages)[/dim]")
             continue
         if user_input == "/save":
-            sid = save_session(agent.messages, config.model)
+            if tasks.task:
+                tasks.task.messages = current.messages
+                tasks.task.save(tasks.manager.tasks_dir)
+                console.print(f"[green]Task {tasks.task.id} saved; resume with /task resume {tasks.task.id}[/green]")
+                continue
+            sid = save_session(current.messages, config.model)
             console.print(f"[green]Session saved: {sid}[/green]")
             console.print(f"Resume with: corecoder -r {sid}")
             continue
         if user_input == "/diff":
+            if tasks.task:
+                tasks.command("/task diff")
+                continue
             from .tools.edit import _changed_files
             if not _changed_files:
                 console.print("[dim]No files modified this session.[/dim]")
@@ -278,6 +310,11 @@ def _repl(agent: Agent, config: Config):
                     console.print(f"  [cyan]{f}[/cyan]")
             continue
         if user_input == "/undo":
+            if tasks.task:
+                console.print(current.workspace.checkpoints.undo())
+                tasks.task.verify_status = "stale"
+                tasks.task.save(tasks.manager.tasks_dir)
+                continue
             from .checkpoints import pending, undo
             console.print(undo())
             left = pending()
@@ -318,18 +355,45 @@ def _repl(agent: Agent, config: Config):
             console.print(f"[dim]{tok}[/dim]", end="")
 
         try:
-            response = agent.chat(user_input, on_token=on_token, on_tool=on_tool,
-                                  on_reasoning=on_reasoning)
+            before = tasks.manager.digest(tasks.task) if tasks.task else None
+            response = current.chat(user_input, on_token=on_token, on_tool=on_tool,
+                                    on_reasoning=on_reasoning)
             if streamed:
                 print()  # newline after streamed tokens
             else:
                 # response wasn't streamed (came after tool calls)
                 console.print(Markdown(response))
+            if tasks.task:
+                tasks.after_chat(before, _display_chat)
         except KeyboardInterrupt:
+            if tasks.task:
+                tasks.task.messages = current.messages
+                tasks.task.save(tasks.manager.tasks_dir)
             console.print("\n[yellow]Interrupted.[/yellow]")
         except Exception as e:  # noqa: BLE001
+            if tasks.task:
+                tasks.task.messages = current.messages
+                tasks.task.save(tasks.manager.tasks_dir)
             # keep the REPL alive no matter what chat() throws
             console.print(f"\n[red]Error: {e}[/red]")
+
+
+def _display_chat(agent: Agent, message: str):
+    """Display a task-start or automatic-repair turn."""
+    streamed = []
+
+    def on_token(tok):
+        streamed.append(tok)
+        print(tok, end="", flush=True)
+
+    def on_tool(name, kwargs):
+        console.print(f"\n[dim]> {name}({_brief(kwargs)})[/dim]")
+
+    result = agent.chat(message, on_token=on_token, on_tool=on_tool)
+    if streamed:
+        print()
+    else:
+        console.print(Markdown(result))
 
 
 def _mcp(arg: str):
@@ -373,6 +437,8 @@ def _show_help():
         "  /tokens        Show token usage\n"
         "  /compact       Compress conversation context\n"
         "  /diff          Show files modified this session\n"
+        "  /task start <requirement>  Start an isolated coding task\n"
+        "  /task status|list|resume <id>|diff|verify|apply [--force]|leave|discard <id>\n"
         "  /undo          Revert the most recent file change\n"
         "  /plan          Toggle plan mode: read-only, then a plan to approve\n"
         "  /save          Save session to disk\n"

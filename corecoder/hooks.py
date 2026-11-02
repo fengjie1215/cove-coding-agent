@@ -13,6 +13,7 @@ a warning: hooks assist the loop, they never get to kill it.
 
 import json
 import logging
+import os
 import subprocess
 from pathlib import Path
 
@@ -27,9 +28,11 @@ TIMEOUT = 10  # seconds; a hung hook must not hang the agent
 class Hooks:
     """Pre/post shell commands matched against tool names."""
 
-    def __init__(self, pre: list[dict], post: list[dict]):
+    def __init__(self, pre: list[dict], post: list[dict], cwd: str | None = None, env: dict | None = None):
         self.pre = pre
         self.post = post
+        self.cwd = cwd
+        self.env = env
 
     def __bool__(self):
         return bool(self.pre or self.post)
@@ -39,7 +42,7 @@ class Hooks:
         is what the model gets as the tool result; None means carry on."""
         payload = {"tool_name": tool_name, "tool_input": tool_input}
         for hook in self.pre:
-            out = _fire(hook, payload)
+            out = _fire(hook, payload, self.cwd, self.env)
             if out is not None and out.returncode == 2:
                 reason = out.stderr.strip() or "no reason given"
                 return "Blocked by hook: " + reason
@@ -49,7 +52,7 @@ class Hooks:
         """PostToolUse hooks observe a finished call; they can never block."""
         payload = {"tool_name": tool_name, "tool_input": tool_input, "tool_response": result}
         for hook in self.post:
-            _fire(hook, payload)
+            _fire(hook, payload, self.cwd, self.env)
 
 
 def load_hooks(path: Path = HOOKS_FILE) -> Hooks:
@@ -67,7 +70,7 @@ def load_hooks(path: Path = HOOKS_FILE) -> Hooks:
     return Hooks(pre, post)
 
 
-def _fire(hook: dict, payload: dict):
+def _fire(hook: dict, payload: dict, cwd: str | None = None, env: dict | None = None):
     """Run one hook if its matcher applies (exact tool name or "*"), payload
     as JSON on stdin. None means it didn't match or failed and was skipped."""
     matcher = hook.get("matcher", "")
@@ -77,6 +80,7 @@ def _fire(hook: dict, payload: dict):
         proc = run_shell(
             hook["command"], check=False, input=json.dumps(payload),
             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=TIMEOUT,
+            cwd=cwd or os.getcwd(), env=env,
         )
     except (subprocess.TimeoutExpired, OSError) as e:
         log.warning("hook skipped (%s): %s", e.__class__.__name__, hook["command"])

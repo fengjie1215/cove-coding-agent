@@ -31,16 +31,18 @@ class Agent:
         max_rounds: int = 50,
         permission=None,
         hooks=None,
+        workspace=None,
     ):
         self.llm = llm
         self.tools = tools if tools is not None else ALL_TOOLS
         self.permission = permission
         self.hooks = hooks
+        self.workspace = workspace
         self._tool_by_name = {t.name: t for t in self.tools}
         self.messages: list[dict] = []
         self.context = ContextManager(max_tokens=max_context_tokens)
         self.max_rounds = max_rounds
-        self._system = system_prompt(self.tools)
+        self._system = system_prompt(self.tools, cwd=str(workspace.cwd) if workspace else None)
         self.plan_mode = False  # toggled by /plan; while on, mutating tools are refused
 
         # wire up sub-agent capability
@@ -175,6 +177,18 @@ class Agent:
         when the model returns N tool calls at once, run them in parallel.
         """
         from .tools.bash import get_tracked_cwd, set_tracked_cwd
+
+        if self.workspace is not None:
+            results = []
+            for tc in tool_calls:
+                if on_tool:
+                    on_tool(tc.name, tc.arguments)
+                result = self._pre_hooks(tc) or self._permit(tc)
+                if result is None:
+                    result = self._exec_tool(tc)
+                    self._post_hooks(tc, result)
+                results.append(result)
+            return results
 
         for tc in tool_calls:
             if on_tool:

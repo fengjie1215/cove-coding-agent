@@ -14,6 +14,7 @@ import threading
 from typing import ClassVar
 
 from ..shell import run_shell
+from ..workspace import Workspace, child_environment
 from .base import Tool
 
 # Track cwd across commands (Claude Code does this too). Thread-local, so that
@@ -54,6 +55,9 @@ _DANGEROUS_PATTERNS = [
 
 
 class BashTool(Tool):
+    def __init__(self, workspace: Workspace | None = None):
+        self.workspace = workspace
+
     name = "bash"
     description = (
         "Execute a shell command. Returns stdout, stderr, and exit code. "
@@ -81,7 +85,10 @@ class BashTool(Tool):
             return f"⚠ Blocked: {warning}\nCommand: {command}\nIf intentional, modify the command to be more specific."
 
         # use this thread's own tracked working directory
-        cwd = get_tracked_cwd() or os.getcwd()
+        cwd = str(self.workspace.shell_cwd) if self.workspace else (get_tracked_cwd() or os.getcwd())
+        prior_cwd = get_tracked_cwd() if self.workspace else None
+        if self.workspace:
+            set_tracked_cwd(None)
 
         try:
             proc = run_shell(
@@ -93,11 +100,19 @@ class BashTool(Tool):
                 errors="replace",
                 timeout=timeout,
                 cwd=cwd,
+                **({"env": child_environment()} if self.workspace else {}),
             )
 
             # track cd commands so next command runs in the right place
             if proc.returncode == 0:
                 _update_cwd(command, cwd)
+                if self.workspace:
+                    moved = get_tracked_cwd()
+                    if moved:
+                        try:
+                            self.workspace.shell_cwd = self.workspace.resolve(moved)
+                        except ValueError:
+                            self.workspace.shell_cwd = self.workspace.cwd
             out = proc.stdout
             if proc.stderr:
                 out += f"\n[stderr]\n{proc.stderr}"
@@ -116,6 +131,9 @@ class BashTool(Tool):
         except Exception as e:  # noqa: BLE001
             # anything else from the OS (spawn failure etc.) also comes back as text
             return f"Error running command: {e}"
+        finally:
+            if self.workspace:
+                set_tracked_cwd(prior_cwd)
 
 
 def _check_dangerous(cmd: str) -> str | None:

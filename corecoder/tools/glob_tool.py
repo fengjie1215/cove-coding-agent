@@ -3,10 +3,14 @@
 from pathlib import Path
 from typing import ClassVar
 
+from ..workspace import Workspace
 from .base import Tool
 
 
 class GlobTool(Tool):
+    def __init__(self, workspace: Workspace | None = None):
+        self.workspace = workspace
+
     name = "glob"
     description = (
         "Find files matching a glob pattern. "
@@ -29,13 +33,15 @@ class GlobTool(Tool):
 
     def execute(self, pattern: str, path: str = ".") -> str:
         try:
-            base = Path(path).expanduser().resolve()
+            base = self.workspace.resolve(path) if self.workspace else Path(path).expanduser().resolve()
             if not base.exists():
                 return f"Error: {path} not found"
             if not base.is_dir():
                 return f"Error: {path} is not a directory"
 
             hits = list(base.glob(pattern))
+            if self.workspace:
+                hits = [p for p in hits if p.resolve().is_relative_to(self.workspace.root)]
             # sort by mtime, newest first
             hits.sort(key=lambda p: p.stat().st_mtime if p.exists() else 0, reverse=True)
 

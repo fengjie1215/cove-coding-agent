@@ -3,10 +3,14 @@
 from pathlib import Path
 from typing import ClassVar
 
+from ..workspace import Workspace
 from .base import Tool
 
 
 class ReadFileTool(Tool):
+    def __init__(self, workspace: Workspace | None = None):
+        self.workspace = workspace
+
     name = "read_file"
     description = (
         "Read a file's contents with line numbers. "
@@ -33,7 +37,7 @@ class ReadFileTool(Tool):
 
     def execute(self, file_path: str, offset: int = 1, limit: int = 2000) -> str:
         try:
-            p = Path(file_path).expanduser().resolve()
+            p = self.workspace.resolve(file_path) if self.workspace else Path(file_path).expanduser().resolve()
             if not p.exists():
                 return f"Error: {file_path} not found"
             if not p.is_file():

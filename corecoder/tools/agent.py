@@ -51,6 +51,7 @@ class AgentTool(Tool):
             # the sub-agent answers to the same consent layer and hooks as the parent
             permission=parent.permission,
             hooks=parent.hooks,
+            workspace=parent.workspace,
         )
 
         # a sub-agent failure comes back as text, never propagates into the parent

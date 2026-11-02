@@ -18,6 +18,62 @@ _stack: list[tuple[str, bytes | None]] = []
 _loaded = False
 
 
+class CheckpointStore:
+    """An isolated undo stack for one task worktree."""
+
+    def __init__(self, path: Path, allowed_root: Path | None = None):
+        self.path = path
+        self.allowed_root = allowed_root.resolve() if allowed_root else None
+        self._entries: list[tuple[str, bytes | None]] = []
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            self._entries = [
+                (entry["path"], base64.b64decode(entry["prior"]) if entry["prior"] is not None else None)
+                for entry in data
+            ]
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
+
+    def _save(self):
+        data = [
+            {"path": path, "prior": base64.b64encode(prior).decode("ascii") if prior is not None else None}
+            for path, prior in self._entries
+        ]
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self.path.with_suffix(".tmp")
+        temporary.write_text(json.dumps(data), encoding="utf-8")
+        temporary.replace(self.path)
+
+    def record(self, path: Path):
+        self._check_path(path)
+        self._entries.append((str(path), path.read_bytes() if path.exists() else None))
+        self._save()
+
+    def _check_path(self, path: Path):
+        if self.allowed_root and not path.resolve().is_relative_to(self.allowed_root):
+            raise ValueError("Undo path is outside task worktree.")
+
+    def undo(self) -> str:
+        if not self._entries:
+            return "Nothing to undo."
+        path, prior = self._entries[-1]
+        target = Path(path)
+        self._check_path(target)
+        self._entries.pop()
+        if prior is None:
+            target.unlink(missing_ok=True)
+            message = f"Removed {path}."
+        else:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(prior)
+            message = f"Restored {path}."
+        self._save()
+        return message
+
+    def pending(self) -> int:
+        return len(self._entries)
+
+
 def _ensure_loaded() -> None:
     global _loaded
     if _loaded:

@@ -4,6 +4,7 @@ import re
 from pathlib import Path
 from typing import ClassVar
 
+from ..workspace import Workspace
 from .base import Tool
 
 # skip these dirs to avoid noise
@@ -11,6 +12,9 @@ _SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", ".tox", "d
 
 
 class GrepTool(Tool):
+    def __init__(self, workspace: Workspace | None = None):
+        self.workspace = workspace
+
     name = "grep"
     description = (
         "Search file contents with regex. "
@@ -41,7 +45,10 @@ class GrepTool(Tool):
         except re.error as e:
             return f"Invalid regex: {e}"
 
-        base = Path(path).expanduser().resolve()
+        try:
+            base = self.workspace.resolve(path) if self.workspace else Path(path).expanduser().resolve()
+        except ValueError as e:
+            return f"Error: {e}"
         if not base.exists():
             return f"Error: {path} not found"
 
@@ -55,8 +62,10 @@ class GrepTool(Tool):
         matches = []
         for fp in files:
             try:
+                if self.workspace:
+                    self.workspace.resolve(str(fp))
                 text = fp.read_text(encoding="utf-8", errors="ignore")
-            except OSError:
+            except (OSError, ValueError):
                 continue
             for lineno, line in enumerate(text.splitlines(), 1):
                 if regex.search(line):
