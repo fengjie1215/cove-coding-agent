@@ -39,6 +39,7 @@ class Agent:
         inherited_rules: RuleSnapshot | None = None,
         memory_store: MemoryStore | None = None,
         inherited_memories: MemorySnapshot | None = None,
+        verification_managed: bool = False,
     ):
         self.llm = llm
         self.tools = tools if tools is not None else ALL_TOOLS
@@ -57,7 +58,11 @@ class Agent:
         self.messages: list[dict] = []
         self.context = ContextManager(max_tokens=max_context_tokens)
         self.max_rounds = max_rounds
-        self._system = system_prompt(self.tools, cwd=str(workspace.cwd) if workspace else None)
+        self._system = system_prompt(
+            self.tools, cwd=str(workspace.cwd) if workspace else None,
+            verification_managed=verification_managed,
+        )
+        self.last_stop_reason: str | None = None
         self.plan_mode = False  # toggled by /plan; while on, mutating tools are refused
 
         # wire up sub-agent capability
@@ -92,6 +97,7 @@ class Agent:
 
     def chat(self, user_input: str, on_token=None, on_tool=None, on_reasoning=None) -> str:
         """Process one user message. May involve multiple LLM/tool rounds."""
+        self.last_stop_reason = None
         self._active_rules = self._inherited_rules if self._inherited_rules is not None else self.rules.load()
         self.memory_error = None
         if self._inherited_memories is not None:
@@ -117,6 +123,7 @@ class Agent:
             # no tool calls -> LLM is done, return text
             if not resp.tool_calls:
                 self.messages.append(resp.message)
+                self.last_stop_reason = "completed"
                 return resp.content
 
             # tool calls -> execute (parallel when multiple, like Claude Code's
@@ -155,6 +162,7 @@ class Agent:
             # compress if tool outputs are big
             self.context.maybe_compress(self.messages, self.llm)
 
+        self.last_stop_reason = "round_limit"
         return "(reached maximum tool-call rounds)"
 
     def _pre_hooks(self, tc) -> str | None:
@@ -283,6 +291,7 @@ class Agent:
         self._active_memories = None
         self.last_memories = MemorySnapshot()
         self.memory_error = None
+        self.last_stop_reason = None
         # a user-visible reset must not leak the dead conversation's checklist
         # into the next system prompt
         todo = self._tool_by_name.get("todo_write")

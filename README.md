@@ -12,7 +12,7 @@
 [![Python](https://img.shields.io/badge/python-3.10+-blue)](https://python.org)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Tests](https://github.com/he-yufeng/CoreCoder/actions/workflows/ci.yml/badge.svg)](https://github.com/he-yufeng/CoreCoder/actions)
-[![engine](https://img.shields.io/badge/engine-1428_LoC-blue)](article/00-index_EN.md)
+[![engine](https://img.shields.io/badge/engine-1437_LoC-blue)](article/00-index_EN.md)
 [![essays](https://img.shields.io/badge/source--reading-8_bilingual-orange)](article/00-index_EN.md)
 
 </div>
@@ -25,7 +25,7 @@
 
 | | CoreCoder | Claude Code | aider | nanoGPT |
 |---|---|---|---|---|
-| Lines of code | 1,428 engine / 4,594 total | hundreds of thousands (closed) | tens of thousands of Python | ~600 (two files) |
+| Lines of code | 1,437 engine / 4,625 total | hundreds of thousands (closed) | tens of thousands of Python | ~600 (two files) |
 | Time to read it all | one afternoon | can't (closed) | a few days of slogging | one afternoon |
 | Breakpoint, change, rerun? | yes, every line | no | yes, but there's a lot | yes |
 | What it's for | understand one, then fork your own | production coding assistant | terminal pair-programming | minimal GPT for teaching |
@@ -36,7 +36,7 @@ The nanoGPT column is there as a reference point: minimal, readable, but it teac
 
 I've always felt coding agents get talked about as if they were arcane. Strip a tool like Claude Code or Cursor all the way down and the core is a `while` loop wrapped around a large model, plus seven or eight tools that let it actually do things. The hard part was never the loop; it's everything the loop has to cope with once it meets the real world. CoreCoder is the minimal version that writes that core out honestly.
 
-The engine (loop, model interface, context, tools, sessions) is 1,428 lines once you drop blank lines and comments. With task isolation, validation, layered rules and confirmed learning, the package is 32 files: 4,594 physical lines, 3,888 net. The extra workflows are documented below.
+The engine (loop, model interface, context, tools, sessions) is 1,437 lines once you drop blank lines and comments. With task isolation, validation, layered rules and confirmed learning, the package is 32 files: 4,625 physical lines, 3,919 net. The extra workflows are documented below.
 
 And it really runs: reads and writes files, executes shell, spawns sub-agents, compacts context in three tiers, and tells you the tokens and dollars a run burned whenever you ask. Anything that would mutate your disk or run a command stops for your consent first. The point of it running is to keep the walkthrough grounded in working code.
 
@@ -87,7 +87,7 @@ Laid out flat, the whole project is this big. Skim it before you clone and you'l
 
 ```
 corecoder/
-├── agent.py        agent loop + parallel tool exec       290 lines   ← start here
+├── agent.py        agent loop + parallel tool exec       299 lines   ← start here
 ├── llm.py          streaming client + retry + cost        349 lines
 ├── context.py      three-tier context compaction          220 lines
 ├── session.py      save / resume + path-traversal guard    97 lines
@@ -95,7 +95,7 @@ corecoder/
 ├── hooks.py        Pre/PostToolUse shell hooks             91 lines
 ├── shell.py        POSIX shell routing (Git Bash on Windows) 61 lines
 ├── mcp.py          MCP stdio client for external tools    237 lines
-├── prompt.py       system prompt                           41 lines
+├── prompt.py       system prompt                           49 lines
 ├── rules.py        layered user and project rules          96 lines
 ├── memory.py       approved memory + local retrieval      468 lines
 ├── learning.py     verified-task memory suggestions       133 lines
@@ -170,7 +170,7 @@ Once you understand it, the natural next step is to fork. Getting started doesn'
 
 - **Swap in a model you actually use.** It's the two env vars from above; `llm.py` (349 lines) is the entry point for all provider adaptation.
 - **Add a tool of your own.** Write a new file against the tool base class in `tools/base.py` (32 lines): run tests, fetch a page, call an LSP, whatever. The end of the second essay walks you through your first one by hand.
-- **Rewrite the system prompt.** `prompt.py` is all of 41 lines; change one line and you'll watch the agent's temperament shift. It's the cheapest "change one thing, see a result" in the whole project.
+- **Rewrite the system prompt.** `prompt.py` is all of 49 lines; change one line and you'll watch the agent's temperament shift. It's the cheapest "change one thing, see a result" in the whole project.
 - **Import it as a library.** The top level exports `Agent`, `LLM`, and `Config`, ready to embed in your own program:
 
 ```python
@@ -234,6 +234,10 @@ Use `/memory add <note>` to save a fact or decision for the current project, or 
 After a task passes validation and `/task apply` succeeds normally, CoreCoder asks whether to spend one model call proposing up to three project facts. Declining does not call the model; `/task learn <id>` can propose later. Forced apply, stale validation and discarded tasks cannot generate suggestions. The model sees a bounded, filtered diff and brief task context, not raw shell output or the full chat. Filtering is best-effort, so review suggestions before accepting them. `/memory candidates` lists pending proposals; `/memory accept <id> [edited text]` confirms one as a project memory, while `/memory reject <id>` erases a rejected proposal. No proposal enters retrieval without acceptance. `/memory disable <id>` keeps provenance but stops retrieval for a stale note. Suggestions that prescribe future behavior belong in rules, not memories.
 
 Notes live in `~/.corecoder/memory.sqlite3`, outside Git worktrees and saved chats. At each turn, CoreCoder searches global and current-project notes locally and injects up to three relevant results within a fixed context budget. The same original-project identity is used inside a task worktree, and a sub-agent receives the parent turn's snapshot. Retrieval also works in one-shot mode, but writing memories requires an explicit interactive command. Memory text is advisory, never a tool permission or a substitute for the current request and rules; a model may still misinterpret it, so inspect `/memory why` when an answer is surprising.
+
+## Local evaluations
+
+[`evals/`](evals/README.md) contains 12 small coding tasks, out-of-worktree hidden checks, runner/report scripts, and the test plan, method, expectations, and results. Mock mode checks the harness; live model runs should be performed in a disposable container or VM. Mock pass rates do not measure agent quality.
 
 Session IDs are sanitized to safe characters before they become filenames, every archive lands under `~/.corecoder/sessions`, and a malicious session name can't traverse out. Undo history persists the same way: checkpoints land in `~/.corecoder/checkpoints.json`, so `/undo` still reaches back after a restart. The cost estimate behind `/tokens` reads a built-in price table, and `~/.corecoder/pricing.json` overrides any entry in it, so a new model or a moved price lands without waiting for a release.
 

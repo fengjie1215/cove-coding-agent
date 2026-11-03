@@ -12,7 +12,7 @@
 [![Python](https://img.shields.io/badge/python-3.10+-blue)](https://python.org)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Tests](https://github.com/he-yufeng/CoreCoder/actions/workflows/ci.yml/badge.svg)](https://github.com/he-yufeng/CoreCoder/actions)
-[![engine](https://img.shields.io/badge/engine-1428_LoC-blue)](article/)
+[![engine](https://img.shields.io/badge/engine-1437_LoC-blue)](article/)
 [![源码导读](https://img.shields.io/badge/源码导读-8篇双语-orange)](article/)
 
 </div>
@@ -25,7 +25,7 @@
 
 | | CoreCoder | Claude Code | aider | nanoGPT |
 |---|---|---|---|---|
-| 代码量 | 引擎 1428 行 / 整包 4594 行 | 几十万行（闭源） | 数万行 Python | 约 600 行（两个文件） |
+| 代码量 | 引擎 1428 行 / 整包 4607 行 | 几十万行（闭源） | 数万行 Python | 约 600 行（两个文件） |
 | 读完要多久 | 一个下午 | 读不了（闭源） | 得啃几天 | 一个下午 |
 | 能不能下断点改了再跑 | 能，每一行 | 不能 | 能，但量大 | 能 |
 | 定位 | 读懂并 fork 出你自己的 agent | 生产级编程助手 | 终端结对编程 | 教学用最小 GPT |
@@ -36,7 +36,7 @@ nanoGPT 那一列是拿来对照的：它最小、可读，但教的是训一个
 
 我一直觉得 coding agent 被讲得太玄了。把 Claude Code、Cursor 这类工具扒到底，核心是一个 while 循环套着一个大模型，外加七八个让它能真正动手的工具。难的从来不是这个循环，而是循环跑进真实世界以后要兜的那些底。CoreCoder 就是把这个核心老老实实写出来的最小版本。
 
-引擎部分（循环、模型接口、上下文、工具、会话）去掉空行和注释是 1428 行。加入任务隔离、验证、分层规则和确认后学习后，整包 32 个文件、物理 4594 行、净 3888 行。新增工作流见下文。
+引擎部分（循环、模型接口、上下文、工具、会话）去掉空行和注释是 1428 行。加入任务隔离、验证、分层规则和确认后学习后，整包 32 个文件、物理 4607 行、净 3901 行。新增工作流见下文。
 
 它真能跑：读写文件、执行 shell、派子 agent、分三层压上下文，还能随时把这趟烧掉的 token 和美元数报给你。任何要动你磁盘、要跑命令的调用，都会先停下来等你点头。这份「注释」背后有真实可运行的实现。
 
@@ -87,7 +87,7 @@ corecoder -p "给 parse_config() 加错误处理"   # 一次性模式，干完�
 
 ```
 corecoder/
-├── agent.py        agent 主循环 + 并行工具执行       290 行   ← 从这里开始读
+├── agent.py        agent 主循环 + 并行工具执行       299 行   ← 从这里开始读
 ├── llm.py          流式客户端 + 重试 + 成本统计       349 行
 ├── context.py      三层上下文压缩                     220 行
 ├── session.py      会话存盘 / 续聊 + 路径穿越防护      97 行
@@ -95,7 +95,7 @@ corecoder/
 ├── hooks.py        工具调用前后的用户 shell 钩子        91 行
 ├── shell.py        POSIX shell 路由（Windows 走 Git Bash） 61 行
 ├── mcp.py          MCP stdio 客户端，接外部工具       237 行
-├── prompt.py       系统提示词                          41 行
+├── prompt.py       系统提示词                          49 行
 ├── rules.py        分层用户与项目规则                    96 行
 ├── memory.py       已确认记忆与本地检索                 468 行
 ├── learning.py     已验证任务的记忆候选                 133 行
@@ -170,7 +170,7 @@ def chat(self, user_input):
 
 - **换个你常用的模型。** 就是上面那两个环境变量，`llm.py`（349 行）是所有 provider 适配的入口。
 - **加一件你自己的工具。** 照 `tools/base.py`（32 行）的工具基类写个新文件，跑测试、抓网页、调 LSP 都行，第二篇文章末尾手把手带你写第一个。
-- **改系统提示词。** `prompt.py` 才 41 行，改一句就能看到 agent 的脾气变了，是门槛最低的「改一处就有反馈」。
+- **改系统提示词。** `prompt.py` 才 49 行，改一句就能看到 agent 的脾气变了，是门槛最低的「改一处就有反馈」。
 - **直接当库 import。** 顶层导出了 `Agent`、`LLM`、`Config`，能嵌进你自己的程序：
 
 ```python
@@ -234,6 +234,10 @@ Worktree 只隔离 Git 文件改动，**不是安全沙箱**：Shell 和外部 M
 任务验证通过并正常执行 `/task apply` 后，CoreCoder 会询问是否额外调用一次模型，提出最多三条项目事实候选；拒绝不会调用模型，之后可用 `/task learn <id>` 补做。强制应用、验证过期或已丢弃的任务不能生成候选。模型只读取限量且经过过滤的改动和简短任务上下文，不读取原始 Shell 输出或完整聊天；过滤并非万无一失，入库前仍须人工检查。`/memory candidates` 查看待审核内容，`/memory accept <id> [修改后内容]` 确认后才作为当前项目记忆参与检索，`/memory reject <id>` 拒绝并清除候选文本。过期记忆可用 `/memory disable <id>` 停用并保留来源。约束未来行为的建议仍应写进规则，而非记忆。
 
 记忆独立保存在 `~/.corecoder/memory.sqlite3`，不进入 Git Worktree 或会话存档。每轮开始时在本地检索全局和当前项目记忆，最多注入三条相关结果，并限制总上下文长度。任务 Worktree 复用原仓库的项目身份，子 Agent 继承父 Agent 当轮的检索快照。`-p` 模式也能读取记忆，但只有交互命令能写入。记忆只是参考上下文，不授予工具权限，也不高于本轮要求和规则；若回答令人意外，可用 `/memory why` 核对来源。
+
+## 本地评测
+
+[`evals/`](evals/README.md) 集中放置 12 个小型编码任务、独立隐藏测试、运行与报告脚本，以及测试计划、原理、预期和结果。模拟模式先验证评测链路；真实模型评测需在一次性容器或虚拟机中运行。模拟通过率不能当作 Agent 能力提升。
 
 会话 ID 会先清洗成安全字符再拿去当文件名，存档统统落在 `~/.corecoder/sessions` 里，恶意会话名穿越不出去。undo 历史也一样落盘：快照写在 `~/.corecoder/checkpoints.json`，重启之后 `/undo` 照样能往回撤。`/tokens` 的费用估算读的是内置价目表，在 `~/.corecoder/pricing.json` 里写自己的价格就会盖掉对应条目，新模型、调价都不用等发版。
 

@@ -15,12 +15,19 @@ from .workspace import child_environment
 
 
 class TaskController:
-    def __init__(self, ordinary_agent: Agent, console, ask, prompt):
+    def __init__(
+        self, ordinary_agent: Agent, console, ask, prompt,
+        manager: TaskManager | None = None, tool_factory=None,
+        max_rounds: int = 50, verification_guard=None,
+    ):
         self.ordinary = ordinary_agent
         self.console = console
         self.ask = ask
         self.prompt = prompt
-        self.manager = TaskManager()
+        self.manager = manager if manager is not None else TaskManager()
+        self.tool_factory = tool_factory or workspace_tools
+        self.max_rounds = max_rounds
+        self.verification_guard = verification_guard
         self.task = None
         self.agent = None
 
@@ -47,14 +54,19 @@ class TaskController:
         hooks = self.ordinary.hooks
         task_hooks = Hooks(hooks.pre, hooks.post, str(workspace.cwd), child_environment()) if hooks else None
         agent = Agent(
-            llm=self.ordinary.llm, tools=[*workspace_tools(workspace), *mcp],
+            llm=self.ordinary.llm, tools=[*self.tool_factory(workspace), *mcp],
             max_context_tokens=self.ordinary.context.max_tokens,
+            max_rounds=self.max_rounds,
             permission=Permission(
                 ask=self.ask, persist_path=self.manager.tasks_dir / f"{task.id}.permissions.json"
             ),
             hooks=task_hooks, workspace=workspace,
-            rules=RuleLoader(Path(task.repo), Path(task.worktree)),
+            rules=RuleLoader(
+                Path(task.repo), Path(task.worktree),
+                home=getattr(getattr(self.ordinary, "rules", None), "home", None),
+            ),
             memory_store=getattr(self.ordinary, "memory_store", None),
+            verification_managed=True,
         )
         agent.messages = task.messages
         self.task, self.agent = task, agent
@@ -191,6 +203,8 @@ class TaskController:
 
     def verify(self) -> str:
         task = self.task
+        if self.verification_guard is not None:
+            self.verification_guard(task, self.manager)
         commands, command_digest = discover(Path(task.worktree), self.agent.workspace.cwd)
         if not commands:
             task.verify_status = "skipped"

@@ -12,10 +12,18 @@ task, present the plan as a numbered list and stop. Do not execute any of it
 until the user approves."""
 
 
-def system_prompt(tools, cwd: str | None = None) -> str:
+def system_prompt(tools, cwd: str | None = None, *, verification_managed: bool = False) -> str:
     cwd = cwd or os.getcwd()
     tool_list = "\n".join(f"- **{t.name}**: {t.description}" for t in tools)
     uname = platform.uname()
+    if verification_managed and not any(t.name == "bash" for t in tools):
+        verification_rule = (
+            "**Verification is managed externally.** No command tool is available in this task. "
+            "After editing, finish your response so the task controller can run the configured "
+            "verification. Do not create scratch scripts or extra files solely to test your work."
+        )
+    else:
+        verification_rule = "**Verify your work.** After making changes, run relevant tests or commands to confirm correctness."
 
     return f"""\
 You are CoreCoder, an AI coding assistant running in the user's terminal.
@@ -32,7 +40,7 @@ You help with software engineering: writing code, fixing bugs, refactoring, expl
 # Rules
 1. **Read before edit.** Always read a file before modifying it.
 2. **edit_file for small changes.** Use edit_file for targeted edits; write_file only for new files or complete rewrites.
-3. **Verify your work.** After making changes, run relevant tests or commands to confirm correctness.
+3. {verification_rule}
 4. **Be concise.** Show code over prose. Explain only what's necessary.
 5. **One step at a time.** For multi-step tasks, execute them sequentially.
 6. **edit_file uniqueness.** When using edit_file, include enough surrounding context in old_string to guarantee a unique match.
