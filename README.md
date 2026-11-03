@@ -25,7 +25,7 @@
 
 | | CoreCoder | Claude Code | aider | nanoGPT |
 |---|---|---|---|---|
-| Lines of code | 1,428 engine / 4,130 total | hundreds of thousands (closed) | tens of thousands of Python | ~600 (two files) |
+| Lines of code | 1,428 engine / 4,594 total | hundreds of thousands (closed) | tens of thousands of Python | ~600 (two files) |
 | Time to read it all | one afternoon | can't (closed) | a few days of slogging | one afternoon |
 | Breakpoint, change, rerun? | yes, every line | no | yes, but there's a lot | yes |
 | What it's for | understand one, then fork your own | production coding assistant | terminal pair-programming | minimal GPT for teaching |
@@ -36,7 +36,7 @@ The nanoGPT column is there as a reference point: minimal, readable, but it teac
 
 I've always felt coding agents get talked about as if they were arcane. Strip a tool like Claude Code or Cursor all the way down and the core is a `while` loop wrapped around a large model, plus seven or eight tools that let it actually do things. The hard part was never the loop; it's everything the loop has to cope with once it meets the real world. CoreCoder is the minimal version that writes that core out honestly.
 
-The engine (loop, model interface, context, tools, sessions) is 1,428 lines once you drop blank lines and comments. With task isolation, validation, layered rules and manual memory, the package is 31 files: 4,130 physical lines, 3,455 net. The extra workflows are documented below.
+The engine (loop, model interface, context, tools, sessions) is 1,428 lines once you drop blank lines and comments. With task isolation, validation, layered rules and confirmed learning, the package is 32 files: 4,594 physical lines, 3,888 net. The extra workflows are documented below.
 
 And it really runs: reads and writes files, executes shell, spawns sub-agents, compacts context in three tiers, and tells you the tokens and dollars a run burned whenever you ask. Anything that would mutate your disk or run a command stops for your consent first. The point of it running is to keep the walkthrough grounded in working code.
 
@@ -97,8 +97,9 @@ corecoder/
 ├── mcp.py          MCP stdio client for external tools    237 lines
 ├── prompt.py       system prompt                           41 lines
 ├── rules.py        layered user and project rules          96 lines
-├── memory.py       explicit memory + local retrieval      248 lines
-├── cli.py          REPL + slash commands + one-shot       581 lines
+├── memory.py       approved memory + local retrieval      468 lines
+├── learning.py     verified-task memory suggestions       133 lines
+├── cli.py          REPL + slash commands + one-shot       646 lines
 ├── config.py       env-var config                          55 lines
 ├── checkpoints.py  /undo snapshot and restore               93 lines
 ├── demo.py         offline end-to-end demo                 101 lines
@@ -199,9 +200,10 @@ Inside the REPL, `/help` lists everything; these are the ones you'll reach for:
 /diff            files changed this session
 /rules show      show active rules and their source files
 /memory add [--global] <text>  save a project or global memory
-/memory list [--project|--global]|show <id>|search <query>|why|forget <id>
+/memory list [--project|--global]|show <id>|search <query>|why [id]|forget <id>
+/memory candidates|accept <id> [edited text]|reject <id>|disable <id>
 /task start <request>  start an isolated coding task
-/task status|list|resume <id>|diff|verify|apply [--force]|leave|discard <id>
+/task status|list|resume <id>|diff|verify|apply [--force]|learn <id>|leave|discard <id>
 /undo            revert the most recent file change
 /plan            toggle plan mode (read-only, then a plan to approve)
 /save  /sessions save / list sessions
@@ -225,9 +227,11 @@ CoreCoder loads optional plain-text Markdown rules from three places, in increas
 
 Rules reload at the start of each user turn and stay fixed through that turn's tool calls. Each file must be UTF-8, a regular non-symlink file, and at most 8 KiB. A current explicit user request takes precedence over these rules; more specific rules take precedence over broader ones. Rules are advisory prompt context, **not security policy**: they cannot grant tool permissions, disable plan mode or bypass the task validation and apply checks. Rule text is not saved into conversation history.
 
-## Manual memory and retrieval
+## Memory, retrieval and confirmed learning
 
-Use `/memory add <note>` to save a fact or decision for the current project, or `/memory add --global <note>` for all projects (with confirmation). `/memory list`, `/memory show <id>`, and `/memory search <query>` inspect the local store; `/memory forget <id>` confirms before deleting a note. `/memory why` shows which notes were selected for the last turn. Keep behavior instructions in layered rules and facts in memory; do not store API keys or other secrets.
+Use `/memory add <note>` to save a fact or decision for the current project, or `/memory add --global <note>` for all projects (with confirmation). `/memory list`, `/memory show <id>`, and `/memory search <query>` inspect the local store; `/memory forget <id>` confirms before deleting a note. `/memory why` shows which notes were selected for the last turn; `/memory why <id>` shows a note's source. Keep behavior instructions in layered rules and facts in memory; do not store API keys or other secrets.
+
+After a task passes validation and `/task apply` succeeds normally, CoreCoder asks whether to spend one model call proposing up to three project facts. Declining does not call the model; `/task learn <id>` can propose later. Forced apply, stale validation and discarded tasks cannot generate suggestions. The model sees a bounded, filtered diff and brief task context, not raw shell output or the full chat. Filtering is best-effort, so review suggestions before accepting them. `/memory candidates` lists pending proposals; `/memory accept <id> [edited text]` confirms one as a project memory, while `/memory reject <id>` erases a rejected proposal. No proposal enters retrieval without acceptance. `/memory disable <id>` keeps provenance but stops retrieval for a stale note. Suggestions that prescribe future behavior belong in rules, not memories.
 
 Notes live in `~/.corecoder/memory.sqlite3`, outside Git worktrees and saved chats. At each turn, CoreCoder searches global and current-project notes locally and injects up to three relevant results within a fixed context budget. The same original-project identity is used inside a task worktree, and a sub-agent receives the parent turn's snapshot. Retrieval also works in one-shot mode, but writing memories requires an explicit interactive command. Memory text is advisory, never a tool permission or a substitute for the current request and rules; a model may still misinterpret it, so inspect `/memory why` when an answer is surprising.
 

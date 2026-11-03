@@ -50,6 +50,8 @@ class Task:
     approved_command_digest: str = ""
     verified_command_digest: str = ""
     verify_results: list[dict] = field(default_factory=list)
+    learning_eligible: bool = False
+    learning_digest: str = ""
 
     def save(self, directory: Path = TASKS_DIR):
         directory.mkdir(parents=True, exist_ok=True)
@@ -136,7 +138,8 @@ class TaskManager:
         patch = self.patch(task)
         if not patch:
             raise RuntimeError("Task has no changes to apply.")
-        if not force and not self.verification_current(task):
+        verified = self.verification_current(task)
+        if not force and not verified:
             raise RuntimeError(
                 "Verification did not pass for the current diff. "
                 "Run /task verify or explicitly use /task apply --force."
@@ -152,6 +155,8 @@ class TaskManager:
             raise RuntimeError("Original repository has tracked changes; task cannot be applied.")
         _git(repo, "apply", "--check", "--binary", "-", input_data=patch)
         _git(repo, "apply", "--binary", "-", input_data=patch)
+        task.learning_eligible = verified and not force
+        task.learning_digest = hashlib.sha256(patch).hexdigest() if task.learning_eligible else ""
         task.status = "applied"
         task.save(self.tasks_dir)
 

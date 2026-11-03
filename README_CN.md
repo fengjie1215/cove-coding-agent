@@ -25,7 +25,7 @@
 
 | | CoreCoder | Claude Code | aider | nanoGPT |
 |---|---|---|---|---|
-| 代码量 | 引擎 1428 行 / 整包 4130 行 | 几十万行（闭源） | 数万行 Python | 约 600 行（两个文件） |
+| 代码量 | 引擎 1428 行 / 整包 4594 行 | 几十万行（闭源） | 数万行 Python | 约 600 行（两个文件） |
 | 读完要多久 | 一个下午 | 读不了（闭源） | 得啃几天 | 一个下午 |
 | 能不能下断点改了再跑 | 能，每一行 | 不能 | 能，但量大 | 能 |
 | 定位 | 读懂并 fork 出你自己的 agent | 生产级编程助手 | 终端结对编程 | 教学用最小 GPT |
@@ -36,7 +36,7 @@ nanoGPT 那一列是拿来对照的：它最小、可读，但教的是训一个
 
 我一直觉得 coding agent 被讲得太玄了。把 Claude Code、Cursor 这类工具扒到底，核心是一个 while 循环套着一个大模型，外加七八个让它能真正动手的工具。难的从来不是这个循环，而是循环跑进真实世界以后要兜的那些底。CoreCoder 就是把这个核心老老实实写出来的最小版本。
 
-引擎部分（循环、模型接口、上下文、工具、会话）去掉空行和注释是 1428 行。加入任务隔离、验证、分层规则和手动记忆后，整包 31 个文件、物理 4130 行、净 3455 行。新增工作流见下文。
+引擎部分（循环、模型接口、上下文、工具、会话）去掉空行和注释是 1428 行。加入任务隔离、验证、分层规则和确认后学习后，整包 32 个文件、物理 4594 行、净 3888 行。新增工作流见下文。
 
 它真能跑：读写文件、执行 shell、派子 agent、分三层压上下文，还能随时把这趟烧掉的 token 和美元数报给你。任何要动你磁盘、要跑命令的调用，都会先停下来等你点头。这份「注释」背后有真实可运行的实现。
 
@@ -97,8 +97,9 @@ corecoder/
 ├── mcp.py          MCP stdio 客户端，接外部工具       237 行
 ├── prompt.py       系统提示词                          41 行
 ├── rules.py        分层用户与项目规则                    96 行
-├── memory.py       手动记忆与本地检索                   248 行
-├── cli.py          REPL + 斜杠命令 + 一次性模式        581 行
+├── memory.py       已确认记忆与本地检索                 468 行
+├── learning.py     已验证任务的记忆候选                 133 行
+├── cli.py          REPL + 斜杠命令 + 一次性模式        646 行
 ├── config.py       环境变量配置                        55 行
 ├── checkpoints.py  /undo 快照与回滚                      93 行
 ├── demo.py         离线端到端演示                       101 行
@@ -199,9 +200,10 @@ README 只给方向，每条的代码细节第七篇接着讲。挑一个动手�
 /diff            查看本次会话改过的文件
 /rules show      查看生效规则及来源文件
 /memory add [--global] <内容>  保存项目或全局记忆
-/memory list [--project|--global]|show <id>|search <查询>|why|forget <id>
+/memory list [--project|--global]|show <id>|search <查询>|why [id]|forget <id>
+/memory candidates|accept <id> [修改后内容]|reject <id>|disable <id>
 /task start <需求>  创建隔离的编码任务
-/task status|list|resume <id>|diff|verify|apply [--force]|leave|discard <id>
+/task status|list|resume <id>|diff|verify|apply [--force]|learn <id>|leave|discard <id>
 /undo            撤销最近一次文件改动
 /plan            开关计划模式（只读摸底，再交出待批准的计划）
 /save  /sessions 保存 / 列出会话
@@ -225,9 +227,11 @@ Worktree 只隔离 Git 文件改动，**不是安全沙箱**：Shell 和外部 M
 
 每次用户发起新一轮对话时重新加载规则，当前轮的多个工具调用使用同一份快照。规则文件须为 UTF-8、非符号链接的普通文件，单个文件最多 8 KiB。用户本轮的明确要求优先于文件规则，具体项目规则优先于通用偏好。规则只是提示词上下文，**不是权限策略**：不能放开工具授权、关闭计划模式或绕过任务验证与应用检查；规则文本也不会存入会话历史。
 
-## 手动记忆与检索
+## 记忆、检索与确认后学习
 
-用 `/memory add <内容>` 保存当前项目的事实或决策；`/memory add --global <内容>` 保存跨项目记忆时会再次确认。`/memory list`、`/memory show <id>`、`/memory search <查询>` 用于查看和检索，`/memory forget <id>` 确认后删除，`/memory why` 显示上一轮实际选中的记忆。行为约束应写在分层规则里，记忆只存事实；不要保存 API Key 等秘密。
+用 `/memory add <内容>` 保存当前项目的事实或决策；`/memory add --global <内容>` 保存跨项目记忆时会再次确认。`/memory list`、`/memory show <id>`、`/memory search <查询>` 用于查看和检索，`/memory forget <id>` 确认后删除，`/memory why` 显示上一轮实际选中的记忆，`/memory why <id>` 查看来源。行为约束应写在分层规则里，记忆只存事实；不要保存 API Key 等秘密。
+
+任务验证通过并正常执行 `/task apply` 后，CoreCoder 会询问是否额外调用一次模型，提出最多三条项目事实候选；拒绝不会调用模型，之后可用 `/task learn <id>` 补做。强制应用、验证过期或已丢弃的任务不能生成候选。模型只读取限量且经过过滤的改动和简短任务上下文，不读取原始 Shell 输出或完整聊天；过滤并非万无一失，入库前仍须人工检查。`/memory candidates` 查看待审核内容，`/memory accept <id> [修改后内容]` 确认后才作为当前项目记忆参与检索，`/memory reject <id>` 拒绝并清除候选文本。过期记忆可用 `/memory disable <id>` 停用并保留来源。约束未来行为的建议仍应写进规则，而非记忆。
 
 记忆独立保存在 `~/.corecoder/memory.sqlite3`，不进入 Git Worktree 或会话存档。每轮开始时在本地检索全局和当前项目记忆，最多注入三条相关结果，并限制总上下文长度。任务 Worktree 复用原仓库的项目身份，子 Agent 继承父 Agent 当轮的检索快照。`-p` 模式也能读取记忆，但只有交互命令能写入。记忆只是参考上下文，不授予工具权限，也不高于本轮要求和规则；若回答令人意外，可用 `/memory why` 核对来源。
 

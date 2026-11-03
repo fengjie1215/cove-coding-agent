@@ -5,8 +5,9 @@ from pathlib import Path
 
 from .agent import Agent
 from .hooks import Hooks
+from .learning import propose
 from .permissions import Permission
-from .rules import RuleLoader
+from .rules import RuleLoader, project_id
 from .tasks import TaskManager
 from .tools import workspace_tools
 from .verify import discover, run
@@ -60,6 +61,33 @@ class TaskController:
         if mcp:
             self.console.print("[yellow]Note: external MCP tools are not isolated by Git Worktree.[/yellow]")
 
+    def learn(self, task):
+        """Propose durable facts after a normally applied, verified task."""
+        if getattr(self.ordinary, "plan_mode", False):
+            raise RuntimeError("Task learning is disabled in plan mode.")
+        store = getattr(self.ordinary, "memory_store", None)
+        if store is None:
+            raise RuntimeError("Memory storage is unavailable.")
+        if task.status != "applied" or not task.learning_eligible:
+            raise RuntimeError("Task learning requires a verified normal apply (not --force).")
+        identity = project_id(Path(task.repo))
+        if not store.learning_run_exists(task.id, identity, task.learning_digest):
+            suggestions = propose(task, self.manager, self.ordinary.llm)
+            store.save_candidates(task.id, identity, task.learning_digest, suggestions)
+        candidates = store.list_candidates(identity, task_id=task.id)
+        pending = [candidate for candidate in candidates if candidate.status == "pending"]
+        if not pending:
+            self.console.print("[dim]No pending memory candidates for this task.[/dim]")
+        for candidate in pending:
+            self.console.print(
+                f"{candidate.id}  {candidate.content}\n  Evidence: {candidate.evidence}", markup=False,
+            )
+        if pending:
+            self.console.print(
+                "Review with /memory accept <id> [edited text] or /memory reject <id>. "
+                "Nothing is saved as a memory until accepted."
+            )
+
     def command(self, line: str) -> str | None:
         parts = line.split(maxsplit=2)
         action = parts[1] if len(parts) > 1 else ""
@@ -80,6 +108,9 @@ class TaskController:
                 self.console.print(f"{task.id}  {task.status:9}  {task.prompt[:70]}")
             if not tasks:
                 self.console.print("[dim]No tasks.[/dim]")
+            return None
+        if action == "learn" and value:
+            self.learn(self.manager.load(value))
             return None
         if action == "resume" and value:
             if self.task:
@@ -139,13 +170,23 @@ class TaskController:
             if value == "--force":
                 self.console.print("[yellow]--force bypasses verification only, not Git conflict checks.[/yellow]")
             if self._confirm("Apply this diff to the original project as uncommitted changes? [y/N] "):
-                self.manager.apply(self.task, force=value == "--force")
+                task = self.task
+                self.manager.apply(task, force=value == "--force")
                 self.console.print("[green]Applied to original project (uncommitted).[/green]")
                 self.task, self.agent = None, None
+                if task.learning_eligible and getattr(self.ordinary, "memory_store", None) is not None:
+                    if self._confirm("Generate reviewable memory candidates with the model? [y/N] "):
+                        try:
+                            self.learn(task)
+                        except Exception as exc:  # noqa: BLE001
+                            self.console.print(
+                                f"[yellow]Applied, but learning suggestions failed ({type(exc).__name__}). "
+                                f"Retry with /task learn {task.id}.[/yellow]"
+                            )
             return None
         raise ValueError(
             "Usage: /task start <requirement>|status|list|resume <id>|diff|verify|"
-            "apply [--force]|leave|discard <id>"
+            "apply [--force]|learn <id>|leave|discard <id>"
         )
 
     def verify(self) -> str:

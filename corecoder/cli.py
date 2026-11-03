@@ -458,10 +458,11 @@ def _show_help():
         "  /compact       Compress conversation context\n"
         "  /rules show    Show active rules, sources, and precedence\n"
         "  /memory add [--global] <text>  Save a manual memory (project by default)\n"
-        "  /memory list [--project|--global]|show <id>|search <query>|why|forget <id>\n"
+        "  /memory list [--project|--global]|show <id>|search <query>|why [id]|forget <id>\n"
+        "  /memory candidates|accept <id> [edited text]|reject <id>|disable <id>\n"
         "  /diff          Show files modified this session\n"
         "  /task start <requirement>  Start an isolated coding task\n"
-        "  /task status|list|resume <id>|diff|verify|apply [--force]|leave|discard <id>\n"
+        "  /task status|list|resume <id>|diff|verify|apply [--force]|learn <id>|leave|discard <id>\n"
         "  /undo          Revert the most recent file change\n"
         "  /plan          Toggle plan mode: read-only, then a plan to approve\n"
         "  /save          Save session to disk\n"
@@ -488,7 +489,7 @@ def _show_rules(agent: Agent):
 
 
 def _memory_command(agent: Agent, arg: str, prompt):
-    """Manage user-authored memories; model tools cannot write this store."""
+    """Manage approved memories and task candidates; model tools cannot write this store."""
     action, _, value = arg.partition(" ")
     value = value.strip()
     store = agent.memory_store
@@ -500,7 +501,7 @@ def _memory_command(agent: Agent, arg: str, prompt):
         except (EOFError, KeyboardInterrupt):
             return False
 
-    if agent.plan_mode and action in ("add", "forget"):
+    if agent.plan_mode and action in ("add", "forget", "accept", "reject", "disable"):
         raise ValueError("Memory changes are disabled in plan mode.")
 
     if action == "add":
@@ -525,7 +526,7 @@ def _memory_command(agent: Agent, arg: str, prompt):
             console.print("[dim]No memories in this scope.[/dim]")
         for entry in entries:
             preview = entry.content.replace("\n", " ")[:100]
-            console.print(f"{entry.id}  {entry.scope:7}  {preview}", markup=False)
+            console.print(f"{entry.id}  {entry.scope:7}  {entry.status:8}  {preview}", markup=False)
         return
 
     if action == "show" and value:
@@ -533,7 +534,7 @@ def _memory_command(agent: Agent, arg: str, prompt):
         if entry is None:
             console.print("[yellow]Memory not found in this project.[/yellow]")
             return
-        console.print(f"{entry.id} ({entry.scope}, created {entry.created_at})", markup=False)
+        console.print(f"{entry.id} ({entry.scope}, {entry.status}, created {entry.created_at})", markup=False)
         console.print(entry.content, markup=False)
         return
 
@@ -557,6 +558,69 @@ def _memory_command(agent: Agent, arg: str, prompt):
                 console.print(f"{hit.entry.id}  {hit.entry.scope}  score={hit.score:.2f}", markup=False)
         return
 
+    if action == "why" and value:
+        entry = store.get(value, identity)
+        if entry is None:
+            console.print("[yellow]Memory not found in this project.[/yellow]")
+            return
+        console.print(f"{entry.id}: {entry.origin}, {entry.status}, {entry.scope}", markup=False)
+        if entry.origin == "task":
+            console.print(
+                f"Task: {entry.source_task_id}\nVerified diff: {entry.source_digest}\n"
+                f"Evidence: {entry.evidence}", markup=False,
+            )
+        else:
+            console.print("Source: manual /memory add", markup=False)
+        return
+
+    if action == "candidates" and not value:
+        candidates = store.list_candidates(identity)
+        if not candidates:
+            console.print("[dim]No pending memory candidates.[/dim]")
+        for candidate in candidates:
+            console.print(
+                f"{candidate.id}  task {candidate.task_id}  {candidate.content}\n"
+                f"  Evidence: {candidate.evidence}", markup=False,
+            )
+        return
+
+    if action == "accept" and value:
+        candidate_id, _, edited = value.partition(" ")
+        candidate = store.get_candidate(candidate_id, identity)
+        if candidate is None or candidate.status != "pending":
+            console.print("[yellow]Pending candidate not found in this project.[/yellow]")
+            return
+        content = edited.strip() or candidate.content
+        console.print(f"Accept project memory: {content}\nEvidence: {candidate.evidence}", markup=False)
+        if not confirmed("Save this candidate as a project memory? [y/N] "):
+            console.print("[dim]Cancelled.[/dim]")
+            return
+        entry = store.accept_candidate(candidate_id, identity, content)
+        console.print(f"[green]Saved project memory {entry.id}.[/green]")
+        return
+
+    if action == "reject" and value:
+        candidate = store.get_candidate(value, identity)
+        if candidate is None or candidate.status != "pending":
+            console.print("[yellow]Pending candidate not found in this project.[/yellow]")
+            return
+        console.print(f"Reject candidate: {candidate.content}", markup=False)
+        if confirmed("Reject and erase this candidate text? [y/N] "):
+            store.reject_candidate(value, identity)
+            console.print("[green]Candidate rejected.[/green]")
+        return
+
+    if action == "disable" and value:
+        entry = store.get(value, identity)
+        if entry is None or entry.status != "active":
+            console.print("[yellow]Active memory not found in this project.[/yellow]")
+            return
+        console.print(f"Disable {entry.scope} memory {entry.id}: {entry.content[:100]}", markup=False)
+        if confirmed("Disable this memory without deleting its provenance? [y/N] "):
+            store.disable(value, identity)
+            console.print(f"[green]Disabled memory {value}.[/green]")
+        return
+
     if action == "forget" and value:
         entry = store.get(value, identity)
         if entry is None:
@@ -572,7 +636,8 @@ def _memory_command(agent: Agent, arg: str, prompt):
 
     console.print(
         "[yellow]Usage: /memory add [--global] <text>|list [--project|--global]|"
-        "show <id>|search <query>|why|forget <id>[/yellow]"
+        "show <id>|search <query>|why [id]|candidates|accept <id> [edited text]|"
+        "reject <id>|disable <id>|forget <id>[/yellow]"
     )
 
 
