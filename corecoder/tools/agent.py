@@ -56,6 +56,8 @@ class AgentTool(Tool):
             inherited_rules=parent._active_rules,
             memory_store=parent.memory_store,
             inherited_memories=parent._active_memories,
+            trace=parent.trace,
+            trace_role="subagent",
         )
 
         # a sub-agent failure comes back as text, never propagates into the parent

@@ -12,7 +12,7 @@
 [![Python](https://img.shields.io/badge/python-3.10+-blue)](https://python.org)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Tests](https://github.com/he-yufeng/CoreCoder/actions/workflows/ci.yml/badge.svg)](https://github.com/he-yufeng/CoreCoder/actions)
-[![engine](https://img.shields.io/badge/engine-1437_LoC-blue)](article/)
+[![engine](https://img.shields.io/badge/engine-1499_LoC-blue)](article/)
 [![源码导读](https://img.shields.io/badge/源码导读-8篇双语-orange)](article/)
 
 </div>
@@ -25,7 +25,7 @@
 
 | | CoreCoder | Claude Code | aider | nanoGPT |
 |---|---|---|---|---|
-| 代码量 | 引擎 1428 行 / 整包 4607 行 | 几十万行（闭源） | 数万行 Python | 约 600 行（两个文件） |
+| 代码量 | 引擎 1499 行 / 整包 4879 行 | 几十万行（闭源） | 数万行 Python | 约 600 行（两个文件） |
 | 读完要多久 | 一个下午 | 读不了（闭源） | 得啃几天 | 一个下午 |
 | 能不能下断点改了再跑 | 能，每一行 | 不能 | 能，但量大 | 能 |
 | 定位 | 读懂并 fork 出你自己的 agent | 生产级编程助手 | 终端结对编程 | 教学用最小 GPT |
@@ -36,7 +36,7 @@ nanoGPT 那一列是拿来对照的：它最小、可读，但教的是训一个
 
 我一直觉得 coding agent 被讲得太玄了。把 Claude Code、Cursor 这类工具扒到底，核心是一个 while 循环套着一个大模型，外加七八个让它能真正动手的工具。难的从来不是这个循环，而是循环跑进真实世界以后要兜的那些底。CoreCoder 就是把这个核心老老实实写出来的最小版本。
 
-引擎部分（循环、模型接口、上下文、工具、会话）去掉空行和注释是 1428 行。加入任务隔离、验证、分层规则和确认后学习后，整包 32 个文件、物理 4607 行、净 3901 行。新增工作流见下文。
+引擎部分（循环、模型接口、上下文、工具、会话）去掉空行和注释是 1499 行。加入任务隔离、验证、分层规则、确认后学习与任务轨迹后，整包 33 个文件、物理 4879 行、净 4154 行。新增工作流见下文。
 
 它真能跑：读写文件、执行 shell、派子 agent、分三层压上下文，还能随时把这趟烧掉的 token 和美元数报给你。任何要动你磁盘、要跑命令的调用，都会先停下来等你点头。这份「注释」背后有真实可运行的实现。
 
@@ -87,7 +87,7 @@ corecoder -p "给 parse_config() 加错误处理"   # 一次性模式，干完�
 
 ```
 corecoder/
-├── agent.py        agent 主循环 + 并行工具执行       299 行   ← 从这里开始读
+├── agent.py        agent 主循环 + 并行工具执行       362 行   ← 从这里开始读
 ├── llm.py          流式客户端 + 重试 + 成本统计       349 行
 ├── context.py      三层上下文压缩                     220 行
 ├── session.py      会话存盘 / 续聊 + 路径穿越防护      97 行
@@ -111,7 +111,7 @@ corecoder/
     ├── read.py       文件读取                           56 行
     ├── write.py      文件写入                           46 行
     ├── todo.py       agent 自维护的任务清单             79 行
-    ├── agent.py      子 agent 派生                      77 行
+    ├── agent.py      子 agent 派生                      79 行
     └── base.py       工具基类                           32 行
 examples/
 └── plan_hooks_demo.py  离线 plan mode + hooks 演示（免 API key）
@@ -203,7 +203,7 @@ README 只给方向，每条的代码细节第七篇接着讲。挑一个动手�
 /memory list [--project|--global]|show <id>|search <查询>|why [id]|forget <id>
 /memory candidates|accept <id> [修改后内容]|reject <id>|disable <id>
 /task start <需求>  创建隔离的编码任务
-/task status|list|resume <id>|diff|verify|apply [--force]|learn <id>|leave|discard <id>
+/task status|list|resume <id>|trace [id]|diff|verify|apply [--force]|learn <id>|leave|discard <id>
 /undo            撤销最近一次文件改动
 /plan            开关计划模式（只读摸底，再交出待批准的计划）
 /save  /sessions 保存 / 列出会话
@@ -216,6 +216,8 @@ quit / exit      退出（Ctrl+C 取消当前回合）
 交互模式执行 `/task start <需求>`，要求当前 Git 仓库已跟踪文件干净，并在 `~/.corecoder/worktrees` 创建 detached Worktree。未跟踪和被忽略的文件（包括 `.env`）不会复制。任务对话、权限、撤销快照、验证记录独立保存在 `~/.corecoder/tasks`；`/task leave` 退出，重启后用 `/task resume <id>` 恢复。任务中 `/task diff` 或 `/diff` 展示完整 Git 补丁，包括新增、删除和二进制文件。
 
 Agent 修改文件后，会优先读取项目的 `.corecoder/verify.json`，否则探测 Python、Node、Maven、Gradle 的测试入口。运行前展示准确的参数数组并征求确认。配置示例：`{"commands":[{"name":"tests","argv":["python","-m","pytest"],"timeout":180}]}`。验证子进程不继承模型 API Key；失败后最多自动修复两轮，缺程序、超时或跳过会提前停止。补丁或验证脚本变化后，原验证结果失效。
+
+`/task trace` 查看当前任务轨迹，`/task trace <id>` 可在退出或重启后查看旧任务。轨迹以 JSONL 保存在 `~/.corecoder/tasks/<id>.trace.jsonl`，记录模型轮次与 token、工具类型、授权结果、耗时、验证和修复状态及补丁摘要。它**不记录**提示词、工具参数与输出、Shell 命令或验证日志；因此可定位失败阶段，但不能完整重放任务，也不能替代对原始改动的审查。
 
 `/task apply` 先展示补丁与验证状态，再确认是否应用到原项目的**未提交工作区**。原仓库 HEAD 变化、已跟踪文件变脏或补丁冲突都会拒绝；验证失败、跳过、过期时默认也拒绝。`/task apply --force` 只能跳过验证门槛，不能绕过冲突检查。`/task discard <id>` 再次确认后删除工具创建的 Worktree 及其中未应用的改动。
 

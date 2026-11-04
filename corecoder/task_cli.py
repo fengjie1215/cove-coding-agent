@@ -9,6 +9,7 @@ from .learning import propose
 from .permissions import Permission
 from .rules import RuleLoader, project_id
 from .tasks import TaskManager
+from .trace import TaskTrace, describe, latest_issue
 from .tools import workspace_tools
 from .verify import discover, run
 from .workspace import child_environment
@@ -30,6 +31,12 @@ class TaskController:
         self.verification_guard = verification_guard
         self.task = None
         self.agent = None
+        self.trace = None
+
+    def _event(self, event: str, **fields) -> None:
+        trace = getattr(self, "trace", None)
+        if trace is not None:
+            trace.record(event, **fields)
 
     def _confirm(self, message: str) -> bool:
         try:
@@ -46,10 +53,11 @@ class TaskController:
             if result["kind"] != "passed" and result.get("summary"):
                 self.console.print(result["summary"][-1500:], markup=False)
 
-    def _activate(self, task):
+    def _activate(self, task, resumed: bool = False):
         if task.status != "active" or not Path(task.worktree).is_dir():
             raise RuntimeError("Task is not active or its worktree is missing.")
         workspace = task.workspace(self.manager.tasks_dir)
+        trace = TaskTrace(self.manager.tasks_dir, task.id)
         mcp = [tool for tool in self.ordinary.tools if tool.name.startswith("mcp__")]
         hooks = self.ordinary.hooks
         task_hooks = Hooks(hooks.pre, hooks.post, str(workspace.cwd), child_environment()) if hooks else None
@@ -67,9 +75,12 @@ class TaskController:
             ),
             memory_store=getattr(self.ordinary, "memory_store", None),
             verification_managed=True,
+            trace=trace,
         )
         agent.messages = task.messages
         self.task, self.agent = task, agent
+        self.trace = trace
+        self._event("task_resumed" if resumed else "task_started")
         if mcp:
             self.console.print("[yellow]Note: external MCP tools are not isolated by Git Worktree.[/yellow]")
 
@@ -121,6 +132,22 @@ class TaskController:
             if not tasks:
                 self.console.print("[dim]No tasks.[/dim]")
             return None
+        if action == "trace":
+            task = self.manager.load(value) if value else self.task
+            if task is None:
+                raise RuntimeError("No active task. Use /task trace <id> to inspect a saved task.")
+            recorder = TaskTrace(self.manager.tasks_dir, task.id)
+            rows = recorder.read()
+            if not rows:
+                self.console.print(f"[dim]No trace recorded for task {task.id}.[/dim]")
+                return None
+            self.console.print(f"Task {task.id}: {len(rows)} trace events (UTC)")
+            issue = latest_issue(rows)
+            if issue:
+                self.console.print(f"Latest observed issue: {issue}", markup=False)
+            for row in rows:
+                self.console.print(describe(row), markup=False)
+            return None
         if action == "learn" and value:
             self.learn(self.manager.load(value))
             return None
@@ -128,7 +155,7 @@ class TaskController:
             if self.task:
                 raise RuntimeError("Leave the current task first.")
             task = self.manager.load(value)
-            self._activate(task)
+            self._activate(task, resumed=True)
             self.console.print(f"[green]Resumed task {task.id}[/green]")
             return None
         if action == "discard" and value:
@@ -141,16 +168,20 @@ class TaskController:
             )
             if self._confirm("Discard this task? [y/N] "):
                 self.manager.discard(task)
+                TaskTrace(self.manager.tasks_dir, task.id).record("task_discarded")
                 if self.task and self.task.id == task.id:
                     self.task, self.agent = None, None
+                    self.trace = None
                 self.console.print(f"[green]Discarded {task.id}.[/green]")
             return None
         if action == "leave" and not value:
             if self.task:
                 self.task.messages = self.agent.messages
                 self.task.save(self.manager.tasks_dir)
+                self._event("task_left")
                 self.console.print(f"[dim]Left task {self.task.id}; worktree retained.[/dim]")
                 self.task, self.agent = None, None
+                self.trace = None
             return None
         if not self.task:
             raise RuntimeError("No active task. Use /task start <requirement> or /task resume <id>.")
@@ -184,8 +215,10 @@ class TaskController:
             if self._confirm("Apply this diff to the original project as uncommitted changes? [y/N] "):
                 task = self.task
                 self.manager.apply(task, force=value == "--force")
+                self._event("task_applied")
                 self.console.print("[green]Applied to original project (uncommitted).[/green]")
                 self.task, self.agent = None, None
+                self.trace = None
                 if task.learning_eligible and getattr(self.ordinary, "memory_store", None) is not None:
                     if self._confirm("Generate reviewable memory candidates with the model? [y/N] "):
                         try:
@@ -197,11 +230,21 @@ class TaskController:
                             )
             return None
         raise ValueError(
-            "Usage: /task start <requirement>|status|list|resume <id>|diff|verify|"
+            "Usage: /task start <requirement>|status|list|resume <id>|trace [id]|diff|verify|"
             "apply [--force]|learn <id>|leave|discard <id>"
         )
 
     def verify(self) -> str:
+        self._event("verify_started")
+        try:
+            status = self._verify_inner()
+        except Exception as exc:
+            self._event("verify_finished", outcome="error", error_type=type(exc).__name__)
+            raise
+        self._event("verify_finished", outcome=status)
+        return status
+
+    def _verify_inner(self) -> str:
         task = self.task
         if self.verification_guard is not None:
             self.verification_guard(task, self.manager)
@@ -222,11 +265,13 @@ class TaskController:
                     f"(cwd={command.cwd}, timeout={command.timeout}s)"
                 )
             if not self._confirm("Run these commands? [y/N] "):
+                self._event("verify_approval", outcome="denied")
                 task.verify_status = "skipped"
                 task.verified_digest = ""
                 task.verified_command_digest = ""
                 task.save(self.manager.tasks_dir)
                 return "skipped"
+            self._event("verify_approval", outcome="allowed")
             task.approved_command_digest = command_digest
         before = self.manager.digest(task)
         results = run(commands, Path(task.worktree))
@@ -238,7 +283,11 @@ class TaskController:
         if before != after:
             task.verify_status = "stale"
         task.save(self.manager.tasks_dir)
-        for result in results:
+        for index, result in enumerate(results, 1):
+            self._event(
+                "verify_command", round=index, outcome=result.kind,
+                exit_code=result.exit_code, seconds=result.seconds,
+            )
             self.console.print(f"{result.name}: {result.kind} (exit={result.exit_code}, {result.seconds}s)")
             if result.summary and result.kind != "passed":
                 self.console.print(result.summary[-3000:], markup=False)
@@ -248,15 +297,19 @@ class TaskController:
         task = self.task
         task.messages = self.agent.messages
         task.save(self.manager.tasks_dir)
-        if self.manager.digest(task) == before_digest:
+        changed_digest = self.manager.digest(task)
+        if changed_digest == before_digest:
             return
+        self._event("worktree_changed", diff_digest=changed_digest)
         for repair in range(3):
             status = self.verify()
             if status == "passed":
                 return
             if status not in ("failed",) or repair == 2:
+                self._event("repair_stopped", outcome=status)
                 return
             previous = self.manager.digest(task)
+            self._event("repair_started", attempt=repair + 1)
             self.console.print(f"[yellow]Verification failed; automatic repair {repair + 1}/2.[/yellow]")
             feedback = (
                 "Automatic validation failed. Fix the cause in this task worktree, then summarize. "
@@ -266,6 +319,9 @@ class TaskController:
             chat(self.agent, feedback)
             task.messages = self.agent.messages
             task.save(self.manager.tasks_dir)
-            if self.manager.digest(task) == previous:
+            changed_digest = self.manager.digest(task)
+            if changed_digest == previous:
+                self._event("repair_stopped", outcome="no_change")
                 self.console.print("[yellow]No new changes; stopping automatic repair.[/yellow]")
                 return
+            self._event("worktree_changed", diff_digest=changed_digest)

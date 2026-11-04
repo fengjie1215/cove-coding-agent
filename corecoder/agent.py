@@ -12,6 +12,8 @@ which means it's done working and ready to report back.
 import concurrent.futures
 import inspect
 import sqlite3
+import time
+import uuid
 
 from .context import ContextManager
 from .llm import LLM
@@ -19,6 +21,7 @@ from .memory import MemorySnapshot, MemoryStore
 from .permissions import Permission
 from .prompt import PLAN_MODE_PROMPT, system_prompt
 from .rules import RuleLoader, RuleSnapshot, project_id
+from .trace import TaskTrace
 from .tools import ALL_TOOLS
 from .tools.agent import AgentTool
 from .tools.base import Tool
@@ -40,6 +43,8 @@ class Agent:
         memory_store: MemoryStore | None = None,
         inherited_memories: MemorySnapshot | None = None,
         verification_managed: bool = False,
+        trace: TaskTrace | None = None,
+        trace_role: str = "main",
     ):
         self.llm = llm
         self.tools = tools if tools is not None else ALL_TOOLS
@@ -64,6 +69,9 @@ class Agent:
         )
         self.last_stop_reason: str | None = None
         self.plan_mode = False  # toggled by /plan; while on, mutating tools are refused
+        self.trace = trace
+        self.trace_role = trace_role
+        self._trace_turn_id: str | None = None
 
         # wire up sub-agent capability
         for t in self.tools:
@@ -97,6 +105,27 @@ class Agent:
 
     def chat(self, user_input: str, on_token=None, on_tool=None, on_reasoning=None) -> str:
         """Process one user message. May involve multiple LLM/tool rounds."""
+        self._trace_turn_id = uuid.uuid4().hex[:12] if self.trace else None
+        self._trace_event("turn_started")
+        try:
+            result = self._chat_inner(user_input, on_token, on_tool, on_reasoning)
+        except KeyboardInterrupt:
+            self._trace_event("turn_finished", outcome="interrupted")
+            raise
+        except Exception as exc:
+            self._trace_event("turn_finished", outcome="error", error_type=type(exc).__name__)
+            raise
+        else:
+            self._trace_event("turn_finished", outcome=self.last_stop_reason or "completed")
+            return result
+        finally:
+            self._trace_turn_id = None
+
+    def _trace_event(self, event: str, **fields) -> None:
+        if self.trace is not None:
+            self.trace.record(event, role=self.trace_role, turn_id=self._trace_turn_id, **fields)
+
+    def _chat_inner(self, user_input, on_token, on_tool, on_reasoning) -> str:
         self.last_stop_reason = None
         self._active_rules = self._inherited_rules if self._inherited_rules is not None else self.rules.load()
         self.memory_error = None
@@ -112,12 +141,26 @@ class Agent:
         self.messages.append({"role": "user", "content": user_input})
         self.context.maybe_compress(self.messages, self.llm)
 
-        for _ in range(self.max_rounds):
-            resp = self.llm.chat(
-                messages=self._full_messages(),
-                tools=self._tool_schemas(),
-                on_token=on_token,
-                on_reasoning=on_reasoning,
+        for round_number in range(1, self.max_rounds + 1):
+            self._trace_event("model_started", round=round_number)
+            started = time.monotonic()
+            try:
+                resp = self.llm.chat(
+                    messages=self._full_messages(),
+                    tools=self._tool_schemas(),
+                    on_token=on_token,
+                    on_reasoning=on_reasoning,
+                )
+            except Exception as exc:
+                self._trace_event(
+                    "model_finished", round=round_number, outcome="error",
+                    error_type=type(exc).__name__, seconds=time.monotonic() - started,
+                )
+                raise
+            self._trace_event(
+                "model_finished", round=round_number, outcome="completed",
+                seconds=time.monotonic() - started, tool_count=len(resp.tool_calls),
+                prompt_tokens=resp.prompt_tokens, completion_tokens=resp.completion_tokens,
             )
 
             # no tool calls -> LLM is done, return text
@@ -133,12 +176,7 @@ class Agent:
             try:
                 if len(resp.tool_calls) == 1:
                     tc = resp.tool_calls[0]
-                    if on_tool:
-                        on_tool(tc.name, tc.arguments)
-                    result = self._pre_hooks(tc) or self._permit(tc)
-                    if result is None:
-                        result = self._exec_tool(tc)
-                        self._post_hooks(tc, result)
+                    result = self._run_tool(tc, on_tool)
                     self.messages.append({
                         "role": "tool",
                         "tool_call_id": tc.id,
@@ -164,6 +202,37 @@ class Agent:
 
         self.last_stop_reason = "round_limit"
         return "(reached maximum tool-call rounds)"
+
+    def _run_tool(self, tc, on_tool=None) -> str:
+        if on_tool:
+            on_tool(tc.name, tc.arguments)
+        self._trace_event("tool_started", tool=tc.name)
+        started = time.monotonic()
+        try:
+            blocked = self._pre_hooks(tc)
+            if blocked:
+                result, outcome = blocked, "blocked_hook"
+                self._trace_event("tool_decision", tool=tc.name, outcome=outcome)
+            else:
+                blocked = self._permit(tc)
+                if blocked is not None:
+                    result = blocked
+                    outcome = "blocked_plan" if self.plan_mode and tc.name not in Permission.READ_ONLY else "denied"
+                    self._trace_event("tool_decision", tool=tc.name, outcome=outcome)
+                else:
+                    self._trace_event("tool_decision", tool=tc.name, outcome="allowed")
+                    result = self._exec_tool(tc)
+                    self._post_hooks(tc, result)
+                    failed = result.startswith(("Error", "⚠ Blocked")) or (tc.name == "bash" and "[exit code:" in result)
+                    outcome = "failed" if failed else "completed"
+        except Exception as exc:
+            self._trace_event(
+                "tool_finished", tool=tc.name, outcome="error",
+                error_type=type(exc).__name__, seconds=time.monotonic() - started,
+            )
+            raise
+        self._trace_event("tool_finished", tool=tc.name, outcome=outcome, seconds=time.monotonic() - started)
+        return result
 
     def _pre_hooks(self, tc) -> str | None:
         """PreToolUse hooks, fired before consent. A string return blocks the
@@ -221,13 +290,7 @@ class Agent:
         if self.workspace is not None:
             results = []
             for tc in tool_calls:
-                if on_tool:
-                    on_tool(tc.name, tc.arguments)
-                result = self._pre_hooks(tc) or self._permit(tc)
-                if result is None:
-                    result = self._exec_tool(tc)
-                    self._post_hooks(tc, result)
-                results.append(result)
+                results.append(self._run_tool(tc, on_tool))
             return results
 
         for tc in tool_calls:

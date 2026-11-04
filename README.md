@@ -12,7 +12,7 @@
 [![Python](https://img.shields.io/badge/python-3.10+-blue)](https://python.org)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Tests](https://github.com/he-yufeng/CoreCoder/actions/workflows/ci.yml/badge.svg)](https://github.com/he-yufeng/CoreCoder/actions)
-[![engine](https://img.shields.io/badge/engine-1437_LoC-blue)](article/00-index_EN.md)
+[![engine](https://img.shields.io/badge/engine-1499_LoC-blue)](article/00-index_EN.md)
 [![essays](https://img.shields.io/badge/source--reading-8_bilingual-orange)](article/00-index_EN.md)
 
 </div>
@@ -25,7 +25,7 @@
 
 | | CoreCoder | Claude Code | aider | nanoGPT |
 |---|---|---|---|---|
-| Lines of code | 1,437 engine / 4,625 total | hundreds of thousands (closed) | tens of thousands of Python | ~600 (two files) |
+| Lines of code | 1,499 engine / 4,879 total | hundreds of thousands (closed) | tens of thousands of Python | ~600 (two files) |
 | Time to read it all | one afternoon | can't (closed) | a few days of slogging | one afternoon |
 | Breakpoint, change, rerun? | yes, every line | no | yes, but there's a lot | yes |
 | What it's for | understand one, then fork your own | production coding assistant | terminal pair-programming | minimal GPT for teaching |
@@ -36,7 +36,7 @@ The nanoGPT column is there as a reference point: minimal, readable, but it teac
 
 I've always felt coding agents get talked about as if they were arcane. Strip a tool like Claude Code or Cursor all the way down and the core is a `while` loop wrapped around a large model, plus seven or eight tools that let it actually do things. The hard part was never the loop; it's everything the loop has to cope with once it meets the real world. CoreCoder is the minimal version that writes that core out honestly.
 
-The engine (loop, model interface, context, tools, sessions) is 1,437 lines once you drop blank lines and comments. With task isolation, validation, layered rules and confirmed learning, the package is 32 files: 4,625 physical lines, 3,919 net. The extra workflows are documented below.
+The engine (loop, model interface, context, tools, sessions) is 1,499 lines once you drop blank lines and comments. With task isolation, validation, layered rules, confirmed learning and task traces, the package is 33 files: 4,879 physical lines, 4,154 net. The extra workflows are documented below.
 
 And it really runs: reads and writes files, executes shell, spawns sub-agents, compacts context in three tiers, and tells you the tokens and dollars a run burned whenever you ask. Anything that would mutate your disk or run a command stops for your consent first. The point of it running is to keep the walkthrough grounded in working code.
 
@@ -87,7 +87,7 @@ Laid out flat, the whole project is this big. Skim it before you clone and you'l
 
 ```
 corecoder/
-├── agent.py        agent loop + parallel tool exec       299 lines   ← start here
+├── agent.py        agent loop + parallel tool exec       362 lines   ← start here
 ├── llm.py          streaming client + retry + cost        349 lines
 ├── context.py      three-tier context compaction          220 lines
 ├── session.py      save / resume + path-traversal guard    97 lines
@@ -111,7 +111,7 @@ corecoder/
     ├── read.py       file read                             56 lines
     ├── write.py      file write                            46 lines
     ├── todo.py       agent-maintained task checklist       79 lines
-    ├── agent.py      sub-agent spawning                    77 lines
+    ├── agent.py      sub-agent spawning                    79 lines
     └── base.py       tool base class                       32 lines
 examples/
 └── plan_hooks_demo.py  offline plan mode + hooks demo (no API key)
@@ -203,7 +203,7 @@ Inside the REPL, `/help` lists everything; these are the ones you'll reach for:
 /memory list [--project|--global]|show <id>|search <query>|why [id]|forget <id>
 /memory candidates|accept <id> [edited text]|reject <id>|disable <id>
 /task start <request>  start an isolated coding task
-/task status|list|resume <id>|diff|verify|apply [--force]|learn <id>|leave|discard <id>
+/task status|list|resume <id>|trace [id]|diff|verify|apply [--force]|learn <id>|leave|discard <id>
 /undo            revert the most recent file change
 /plan            toggle plan mode (read-only, then a plan to approve)
 /save  /sessions save / list sessions
@@ -216,6 +216,8 @@ quit / exit      exit (Ctrl+C cancels the current round)
 In interactive mode, `/task start <request>` requires a Git repository with no tracked changes and creates a detached worktree under `~/.corecoder/worktrees`. Untracked and ignored files, including `.env`, are not copied. Task conversations, permissions, undo checkpoints and validation state live separately under `~/.corecoder/tasks`; use `/task leave` and `/task resume <id>` across restarts. `/task diff` (or `/diff` while in a task) shows the complete Git patch, including added, deleted and binary files.
 
 After a changed turn, CoreCoder proposes validation commands from `.corecoder/verify.json` or detects Python, Node, Maven or Gradle entry points. It shows the exact argument arrays and asks before execution. A config file can contain `{"commands":[{"name":"tests","argv":["python","-m","pytest"],"timeout":180}]}`. Commands run without model API keys; failures can trigger at most two agent repair rounds. Missing tools, timeouts and skipped checks stop the repair loop. Changing the diff or validation scripts makes the prior result stale.
+
+`/task trace` shows the current task's execution trace; `/task trace <id>` works after leaving or restarting. JSONL events under `~/.corecoder/tasks/<id>.trace.jsonl` capture model rounds and token counts, tool categories, approval decisions, durations, verification and repair outcomes, and patch digests. They **do not capture** prompts, tool arguments or outputs, shell commands, or verification logs. The trace helps locate a failure stage but cannot replay a task or replace diff review.
 
 `/task apply` shows the diff and validation state, then asks before applying it as **uncommitted** changes to the original repository. It refuses changed original HEAD, dirty tracked files and patch conflicts. Failed, skipped or stale checks also block normal apply; `/task apply --force` bypasses only that validation gate, not conflict checks. `/task discard <id>` confirms before removing the created worktree and its unapplied changes.
 

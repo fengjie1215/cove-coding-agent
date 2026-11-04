@@ -462,7 +462,7 @@ def _show_help():
         "  /memory candidates|accept <id> [edited text]|reject <id>|disable <id>\n"
         "  /diff          Show files modified this session\n"
         "  /task start <requirement>  Start an isolated coding task\n"
-        "  /task status|list|resume <id>|diff|verify|apply [--force]|learn <id>|leave|discard <id>\n"
+        "  /task status|list|resume <id>|trace [id]|diff|verify|apply [--force]|learn <id>|leave|discard <id>\n"
         "  /undo          Revert the most recent file change\n"
         "  /plan          Toggle plan mode: read-only, then a plan to approve\n"
         "  /save          Save session to disk\n"
