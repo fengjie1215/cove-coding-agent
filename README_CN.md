@@ -1,332 +1,140 @@
 <div align="center">
 
-# CoreCoder
+# Cove
 
-**编程 agent 里的 nanoGPT：可读的 Python 内核，支持任务级 Worktree 隔离、自动验证和人工审查应用。**
+**一个强调改动可审查、自动验证与项目上下文的 CLI Coding Agent。**
 
-*learn from it · fork it · ship something better*
-
-中文 | [English](README.md) | [配套源码导读 · 八篇双语](article/)
-
-[![PyPI](https://img.shields.io/pypi/v/corecoder)](https://pypi.org/project/corecoder/)
-[![Python](https://img.shields.io/badge/python-3.10+-blue)](https://python.org)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![Tests](https://github.com/he-yufeng/CoreCoder/actions/workflows/ci.yml/badge.svg)](https://github.com/he-yufeng/CoreCoder/actions)
-[![engine](https://img.shields.io/badge/engine-1503_LoC-blue)](article/)
-[![源码导读](https://img.shields.io/badge/源码导读-8篇双语-orange)](article/)
+[English](README.md) · [评测说明](evals/README.md) · [MIT License](LICENSE)
 
 </div>
 
-- **读得完。** 一个下午读完整个引擎，没有一处藏着你看不懂的魔法。
-- **改得动。** 每一行都能在你自己机器上下断点、改了再跑。它真能干活，所以这份参考是活的，不是示意图。
-- **留白即起点。** 刻意只留最小核心，没做的那些不是半成品，是留给你 fork 出更好东西的地方。
+Cove 可以在现有代码仓库中读取文件、修改代码、调用工具并汇报结果。对于明确的编码任务，它会在独立 Git Worktree 中执行修改，验证后让用户审查完整差异，再决定是否应用回原工作区。分层规则和经确认的记忆提供项目级上下文。
 
-## 和谁比
+**命名说明：**仓库名是 Cove；为了兼容现有安装方式，Python 包名、可执行命令、环境变量和本地数据目录目前仍使用 `corecoder`。本仓库建立在 MIT 许可的 [CoreCoder](https://github.com/he-yufeng/CoreCoder) 基础上，来源与许可见文末[致谢与许可](#致谢与许可)。
 
-| | CoreCoder | Claude Code | aider | nanoGPT |
-|---|---|---|---|---|
-| 代码量 | 引擎 1503 行 / 整包 5108 行 | 几十万行（闭源） | 数万行 Python | 约 600 行（两个文件） |
-| 读完要多久 | 一个下午 | 读不了（闭源） | 得啃几天 | 一个下午 |
-| 能不能下断点改了再跑 | 能，每一行 | 不能 | 能，但量大 | 能 |
-| 定位 | 读懂并 fork 出你自己的 agent | 生产级编程助手 | 终端结对编程 | 教学用最小 GPT |
+## 功能概览
 
-nanoGPT 那一列是拿来对照的：它最小、可读，但教的是训一个 GPT。CoreCoder 想干的是同一件事，只是把对象换成一个能真正改代码的 agent。和 Claude Code、aider 摆在一起，不是要跟它们抢用户，CoreCoder 是借它们来学、来起步的那块地基，根本不在一个赛道。
+| 模块 | 当前能力 |
+| --- | --- |
+| Agent 核心 | 流式调用 OpenAI 兼容模型、工具调用、轮次上限、请求重试、Token/费用显示和三层上下文压缩。 |
+| 工具与控制 | 文件读写编辑搜索、Shell、待办清单、子 Agent、工具授权、只读计划模式、MCP 工具、Hooks、会话保存和 `/undo`。 |
+| 任务工作流 | 显式创建独立 Git Worktree；任务状态和对话可恢复；查看完整 diff 与执行轨迹；受检查的补丁应用。 |
+| 自动验证 | 用户确认测试/Lint 命令；从配置或 Python、Node、Maven、Gradle 项目探测入口；超时控制；失败后最多两轮自动修复重验。 |
+| 个性化 | 分层 Markdown 规则、手动记忆及本地检索、需用户确认才入库的任务记忆建议。 |
+| 可选执行隔离 | `/task start --sandbox` 使用 Docker 执行 Shell 和验证，并限制网络、挂载和资源。 |
+| 评测 | 12 个小型编码任务、独立隐藏检查、运行与报告脚本，以及记录了条件和局限的结果。 |
 
-## 这是什么
+## 安装与启动
 
-我一直觉得 coding agent 被讲得太玄了。把 Claude Code、Cursor 这类工具扒到底，核心是一个 while 循环套着一个大模型，外加七八个让它能真正动手的工具。难的从来不是这个循环，而是循环跑进真实世界以后要兜的那些底。CoreCoder 就是把这个核心老老实实写出来的最小版本。
-
-引擎部分（循环、模型接口、上下文、工具、会话）去掉空行和注释是 1503 行。加入任务隔离、验证、分层规则、确认后学习、任务轨迹与可选容器执行后，整包 34 个文件、物理 5108 行、净 4363 行。新增工作流见下文。
-
-它真能跑：读写文件、执行 shell、派子 agent、分三层压上下文，还能随时把这趟烧掉的 token 和美元数报给你。任何要动你磁盘、要跑命令的调用，都会先停下来等你点头。这份「注释」背后有真实可运行的实现。
-
-代码来自一次公开拆解。公开的源码分析里，Claude Code 这类生产级 agent 暴露出不少关键架构，我挑出最核心的一层，用尽量少的代码诚实地复写了一遍。所以读 CoreCoder，约等于读一份基于公开源码分析的「可运行注释版」：讲的是这类 agent 的核心思路，而它本身只是最小复写，就摆在你机器上，随你拆、随你改。
-
-<p align="center">
-  <img src="assets/demo-plan-hooks.gif" width="760"
-       alt="plan mode 实战：agent 先读 fib.py，写入被 plan mode 拦下，先给计划；批准之后才动手改文件、跑测试，Pre/PostToolUse hooks 在每次调用前后触发">
-</p>
-
-<p align="center"><sub><i>这一千行真能跑通一个完整回合：让它修 buggy.py，它自己读文件、改代码、跑一遍确认、再给结论。看完就回来读代码。</i></sub></p>
-
-这份 README 也就按这条线铺开：上半带你**读懂**（代码地图、主循环、八篇导读），下半带你 **fork** 它、再指几个能往更好里做的方向。
-
-## 先跑一次（读之前的五分钟）
-
-读源码之前，先让它在你机器上活一次，建立点体感。它是个拿来 fork 的地基，所以推荐直接 clone 下来、可编辑安装，边读边改：
+需要 Python 3.10 及以上版本。建议克隆本仓库并以可编辑模式安装：
 
 ```bash
-git clone https://github.com/he-yufeng/CoreCoder
-cd CoreCoder
-pip install -e .
+git clone https://github.com/fengjie1215/cove-coding-agent.git
+cd cove-coding-agent
+python -m pip install -e .
 ```
 
-只想先跑起来找找感觉，直接 `pip install corecoder` 也行。
+配置一个 OpenAI 兼容模型。例如使用 DeepSeek，可在启动命令所在目录创建 `.env`：
 
-给它一个模型加一把 key 就能动。默认走 OpenAI 兼容接口，换 provider 通常只是改两个环境变量：
+```dotenv
+CORECODER_API_KEY=your_key_here
+CORECODER_MODEL=deepseek-chat
+OPENAI_BASE_URL=https://api.deepseek.com
+```
 
-| Provider | 环境变量示例 |
-|---|---|
-| OpenAI（默认 `gpt-5.5`） | `OPENAI_API_KEY=sk-...` |
-| DeepSeek | `OPENAI_API_KEY=sk-... OPENAI_BASE_URL=https://api.deepseek.com CORECODER_MODEL=deepseek-chat` |
-| OmniRoute | `OPENAI_API_KEY=your-key OPENAI_BASE_URL=http://localhost:20128/v1 CORECODER_MODEL=auto` |
-| 本地 Ollama | `OPENAI_API_KEY=ollama OPENAI_BASE_URL=http://localhost:11434/v1 CORECODER_MODEL=qwen2.5-coder` |
-
-Kimi、Qwen 这些同样是改这两个变量；连 OpenAI 兼容接口都不给的 provider，装上可选的 LiteLLM 后端（`pip install "corecoder[litellm]"`）能路由一百多家。第三篇文章把这块讲得更细。思考模型也是一等公民：deepseek-reasoner、kimi-k3 这类模型的思考过程会实时流出来，CoreCoder 把它用暗色显示出来，但不进对话历史，provider 永远不会在回包里看到它。key 可以直接 `export`，也可以在项目根目录扔个 `.env`，启动时自动加载。然后：
-
-端到端真机冒烟过三家（读文件、改代码、跑一次确认、自己报告）：DeepSeek、Qwen3、Kimi K2，走同一个 OpenRouter 兼容端点，各自完整跑完全循环。写脚本用 one-shot 的留意：`-p` 默认拒绝一切改动类工具，要加 `--yes`，这是设计如此。
+Shell 中已有的环境变量优先于 `.env`，配置加载器也会向父目录查找。**不要提交 API Key**：在工作项目中创建 `.env` 时，先确认它已被 Git 忽略。任务 Worktree 不会复制原工作区的 `.env`。
 
 ```bash
-corecoder                                  # 交互式 REPL
-corecoder -p "给 parse_config() 加错误处理"   # 一次性模式，干完就退
+corecoder                         # 交互模式
+corecoder --demo                  # 不需要 API Key 的离线演示
+corecoder -p "解释这个仓库的结构"   # 一次性模式
 ```
 
-## 读懂它：代码地图
+普通聊天可以从新文件夹启动；`/task start` 则仅在已有 Git 仓库、且已跟踪文件干净时可用，并且只支持交互模式。一次性模式默认拒绝修改类工具；只有显式添加 `--yes` 才会预授权这些调用。
 
-整个项目摊开就这么大，clone 之前扫一眼，心里就有数了。这也是它和 Claude Code 几十万行最实在的区别：你能把它当一本书的目录来读。建议从 `agent.py` 的主循环读起，那是整个 agent 的心脏。
+## 从需求到可审查改动
 
-```
-corecoder/
-├── agent.py        agent 主循环 + 并行工具执行       366 行   ← 从这里开始读
-├── llm.py          流式客户端 + 重试 + 成本统计       349 行
-├── context.py      三层上下文压缩                     220 行
-├── session.py      会话存盘 / 续聊 + 路径穿越防护      97 行
-├── permissions.py  改动类工具的用户授权                89 行
-├── hooks.py        工具调用前后的用户 shell 钩子        91 行
-├── shell.py        POSIX shell 路由（Windows 走 Git Bash） 61 行
-├── mcp.py          MCP stdio 客户端，接外部工具       237 行
-├── prompt.py       系统提示词                          49 行
-├── rules.py        分层用户与项目规则                    96 行
-├── memory.py       已确认记忆与本地检索                 468 行
-├── learning.py     已验证任务的记忆候选                 133 行
-├── cli.py          REPL + 斜杠命令 + 一次性模式        657 行
-├── config.py       环境变量配置                        55 行
-├── checkpoints.py  /undo 快照与回滚                      93 行
-├── sandbox.py      可选的任务级 Docker 执行             141 行
-├── demo.py         离线端到端演示                       101 行
-└── tools/
-    ├── bash.py       shell + 危险命令闸 + cd 追踪      221 行
-    ├── edit.py       唯一匹配搜索替换 + diff            99 行
-    ├── grep.py       内容搜索                           93 行
-    ├── glob_tool.py  文件名匹配                         52 行
-    ├── read.py       文件读取                           56 行
-    ├── write.py      文件写入                           46 行
-    ├── todo.py       agent 自维护的任务清单             79 行
-    ├── agent.py      子 agent 派生                      79 行
-    └── base.py       工具基类                           32 行
-examples/
-└── plan_hooks_demo.py  离线 plan mode + hooks 演示（免 API key）
+在要修改的项目目录中启动 `corecoder`，然后输入：
+
+```text
+/task start 为解析器补充回归测试并修复错误
+/task status
+/task diff
+/task trace
+/task verify
+/task apply
 ```
 
-八个工具：`bash`、`read_file`、`write_file`、`edit_file`、`glob`、`grep`、`todo_write`（agent 自己维护的任务清单）、`agent`（派子 agent）。其余都是包在引擎核心外面的 CLI 外壳、配置和打包。存在 `~/.corecoder/mcp.json` 时，里面的 MCP 服务器会以 `mcp__*` 工具的身份并进这八件里，下面有专门一节讲。
+任务以当前 HEAD 为基点创建 detached Worktree。Agent 在任务目录中修改文件，原工作区在应用前保持不变；未跟踪文件和被忽略文件不会复制。发生改动后，Cove 会提出验证命令，展示给用户确认再运行；验证失败时，结果可反馈给同一任务 Agent，最多自动修复并重验两轮。
 
-## 一个 while 循环就是 agent 的本体
+`/task diff` 展示完整 Git 差异，包括新增、删除和二进制文件。`/task status` 显示验证结果是否仍对应当前改动。`/task apply` 先展示差异和验证状态并再次确认，然后检查原仓库 HEAD、已跟踪文件是否干净，以及补丁能否应用。成功后，改动会留在原项目的**未提交工作区**，不会自动 commit 或 push。
 
-一个 agent 的本体，一句话就能讲清：把用户的话交给模型，模型想调工具就执行，把结果塞回上下文，再问模型，直到它不再要工具、给出回答。落到代码，也就十来行：
+验证失败、跳过或过期时，普通应用会被阻止。`/task apply --force` 只能在审查后跳过验证门槛，不能跳过补丁冲突或原仓库状态检查。`/task leave` 保留任务以便之后恢复；`/task list` 和 `/task resume <id>` 用于查看与恢复；`/task discard <id>` 经确认后清理任务 Worktree 及未应用的改动。
 
-```python
-# corecoder/agent.py · 主循环（精简骨架）
-def chat(self, user_input):
-    self.messages.append(user_input)
+任务元数据和对话位于 `~/.corecoder/tasks`，任务 Worktree 位于 `~/.corecoder/worktrees`；普通聊天和 `-p` 模式保持原有行为。
 
-    for _ in range(self.max_rounds):                   # 循环有上限，跑不飞
-        reply = self.llm.chat(self.messages, self.tools)   # 交给模型规划下一步
-        if not reply.tool_calls:                       # 模型不再要工具
-            return reply.text                          #   → 收工，把回答给用户
-        results = run_parallel(reply.tool_calls)       # 要工具就并发执行
-        self.messages += results                       # 结果回灌，进入下一轮
+### 自定义验证命令
 
-    return "(已达轮次上限)"
-```
-
-就这么点。这个循环的核心骨架就二十来行，把并行执行和被 Ctrl+C 打断后的回填都算上，也才四十多行。CoreCoder 一千多行里剩下的，几乎全在收拾它真跑起来之后冒出来的岔子。`llm.py` 最后成了引擎里最大的文件，不是因为调模型有多难，而是流式返回里一个工具调用的参数会被切成好几段先后送到、得按顺序拼回去，provider 偶尔吐半截 JSON 或把 usage 填成 null，限流（429）、超时、连接中断和 5xx 都得退避重试，其余 4xx 该直接抛就别硬试。已经开始出字的流也可能半路断掉，所以重试包住的是整个请求，不只是建连。这些不起眼的脏活，而不是那个循环，才是一个 agent 从能演示走到能交付真正吃工程功夫的地方；第三篇文章顺着它拆到每一行。
-
-有三个决定值得单独看，因为它们是「先读懂别人怎么做」之后才做得出的取舍，也是你 fork 自己 agent 时可以直接抄走的判断。
-
-**`edit_file` 用唯一匹配的搜索替换，不靠行号。** 行号这东西，模型只要数偏一行，就会悄悄改错地方；锚定一段唯一的原文：匹配不到，就把文件开头甩回去让模型照着重新锚定；匹配到多处，就让它多带几行上下文再来，而不是赌一个。改成功了，连一段 diff 一起返回。失败能复位、成功能复核，闭环都收在工具自己手里。
-
-**上下文不是满了才一刀切，而是按代价从轻到重分三档退让。** 先在半满（50%）时把超长的工具输出就地截短，这一档纯机械、不花一次模型调用；到 70% 还压不下去，就把较早的轮次交给模型总结成一段摘要，最近几轮原文原样留着；逼到 90% 才进应急档，连摘要带最近几轮一起收到最紧。粗暴截断往往恰好丢掉一个长任务最依赖的早期决定；分层退让，是让它按重要性从低到高一档档地让，而不是一上来就把最老的决定整段切掉。
-
-**约束子 agent 能干什么，靠的是不给它那把工具，而不是写一堆规则求它听话。** 派出去的子 agent 拿到的是隔离的上下文、自己独立的一份历史，工具集只比父 agent 少一样：`agent` 工具本身，于是它没法再往下递归派子 agent。少给一件工具，比事后立一条规矩干净得多。它还复用父 agent 同一个模型连接（花销一并算进总账），输出一过 5000 字就截短、只留开头一段，轮次上限也压得比父 agent 更短。同一套克制，从头贯到尾。
-
-每一个「为什么」，下面的文章系列都拆到了具体代码行。
-
-## 配套源码导读 · 八篇双语
-
-我还写了一套双语源码导读，一篇导言加八篇正文，每篇都配英文镜像（`_EN.md`）。它对着 CoreCoder 的真实代码，讲 Claude Code 这类 agent 的内部构造。有一条给自己立的硬规矩：每一处行数、每一段代码都从仓库里现读现核，绝不凭印象编。前六篇带你读懂，第七篇带你 fork，第八篇讲怎么不动主循环地扩展它，哪篇先读都行。
-
-- **[导言 · 用 CoreCoder 读懂 Claude Code，再造一个你自己的](article/00-index.md)**
-- **[01 一个 agent 的本体，是一个 while 循环](article/01-the-loop.md)** — `agent.py` 的主循环、打断与轮次上限
-- **[02 工具系统：让模型安全地动手](article/02-tools.md)** — `tools/` 八个工具与 bash 安全闸
-- **[03 接入任意大模型，顺便把账算清楚](article/03-llm-and-cost.md)** — `llm.py` 的 provider 包装、重试与成本统计
-- **[04 用有限的窗口扛住一个长任务](article/04-context.md)** — `context.py` 的三层压缩与孤儿 tool 消息
-- **[05 并行执行与子 agent](article/05-parallel-and-subagents.md)** — 线程池并发与子 agent 隔离
-- **[06 把它跑成一个真正的命令行工具](article/06-session-and-cli.md)** — `session.py` 与路径穿越防护
-- **[07 Fork CoreCoder，搭一个你自己的 coding agent](article/07-build-your-own.md)** — 从 fork 到加自定义工具到换模型
-- **[08 不动主循环的三种加法：MCP、钩子与计划模式](article/08-extensibility.md)** — v0.6.0 扩展三件套，以及让它们成立的那条契约
-
-## Fork 它，造个更好的
-
-读懂之后，最自然的下一步就是 fork。起手不用伤筋动骨：
-
-- **换个你常用的模型。** 就是上面那两个环境变量，`llm.py`（349 行）是所有 provider 适配的入口。
-- **加一件你自己的工具。** 照 `tools/base.py`（32 行）的工具基类写个新文件，跑测试、抓网页、调 LSP 都行，第二篇文章末尾手把手带你写第一个。
-- **改系统提示词。** `prompt.py` 才 49 行，改一句就能看到 agent 的脾气变了，是门槛最低的「改一处就有反馈」。
-- **直接当库 import。** 顶层导出了 `Agent`、`LLM`、`Config`，能嵌进你自己的程序：
-
-```python
-from corecoder import Agent, LLM
-
-llm = LLM(model="deepseek-chat", api_key="sk-...", base_url="https://api.deepseek.com")
-print(Agent(llm=llm).chat("找出项目里所有 TODO 注释并列出来"))
-```
-
-往深里做，方向也都摆在明处。可选的任务容器改善了执行隔离，但还不是经过完整安全审计的产品；下面每一条仍是你能接着往下做、把它推向更强的入口：
-
-- **bash 的危险命令拦截只是正则黑名单。** 它能防手滑，却挡不住对抗性命令。可选 Docker 模式缩小了风险范围，但更强的隔离、策略执行和安全评测仍待完善。
-- **重试只做了指数退避。** 没有 fallback 模型，也没有美元硬预算。顺着 `llm.py` 往下，加一条 fallback 模型链和超预算自动停的闸，改动基本就集中在这一个文件。
-- **子 agent 只有最朴素的同步执行。** 做成异步或流式执行器，正好补上第五篇点名的、相对生产级 agent 流式执行的那段差距。
-- **不做 RAG，MCP 客户端也只讲工具这一小片。** 给大仓加检索式代码定位还空着，`mcp.py` 也特意没实现 resources 和 prompts。随便挑一个，都是从最小核心往你自己的更强 agent 扩的真实方向。
-
-README 只给方向，每条的代码细节第七篇接着讲。挑一个动手，就是把它做得更好的开始。
-
-## 命令
-
-进了 REPL，`/help` 列全部，常用的这几个：
-
-```
-/model <名称>    切换模型
-/compact         手动压缩上下文
-/tokens          查看 token 用量和费用估算
-/diff            查看本次会话改过的文件
-/rules show      查看生效规则及来源文件
-/memory add [--global] <内容>  保存项目或全局记忆
-/memory list [--project|--global]|show <id>|search <查询>|why [id]|forget <id>
-/memory candidates|accept <id> [修改后内容]|reject <id>|disable <id>
-/task start [--sandbox] <需求>  创建隔离的编码任务
-/task status|list|resume <id>|trace [id]|diff|verify|apply [--force]|learn <id>|leave|discard <id>
-/undo            撤销最近一次文件改动
-/plan            开关计划模式（只读摸底，再交出待批准的计划）
-/save  /sessions 保存 / 列出会话
-/mcp             MCP 服务器状态；/mcp reconnect <名字> 拉起挂掉的一台
-quit / exit      退出（Ctrl+C 取消当前回合）
-```
-
-## 任务级 Worktree 与自动验证
-
-交互模式执行 `/task start <需求>`，要求当前 Git 仓库已跟踪文件干净，并在 `~/.corecoder/worktrees` 创建 detached Worktree。未跟踪和被忽略的文件（包括 `.env`）不会复制。任务对话、权限、撤销快照、验证记录独立保存在 `~/.corecoder/tasks`；`/task leave` 退出，重启后用 `/task resume <id>` 恢复。任务中 `/task diff` 或 `/diff` 展示完整 Git 补丁，包括新增、删除和二进制文件。
-
-Agent 修改文件后，会优先读取项目的 `.corecoder/verify.json`，否则探测 Python、Node、Maven、Gradle 的测试入口。运行前展示准确的参数数组并征求确认。配置示例：`{"commands":[{"name":"tests","argv":["python","-m","pytest"],"timeout":180}]}`。验证子进程不继承模型 API Key；失败后最多自动修复两轮，缺程序、超时或跳过会提前停止。补丁或验证脚本变化后，原验证结果失效。
-
-`/task trace` 查看当前任务轨迹，`/task trace <id>` 可在退出或重启后查看旧任务。轨迹以 JSONL 保存在 `~/.corecoder/tasks/<id>.trace.jsonl`，记录模型轮次与 token、工具类型、授权结果、耗时、验证和修复状态及补丁摘要。它**不记录**提示词、工具参数与输出、Shell 命令或验证日志；因此可定位失败阶段，但不能完整重放任务，也不能替代对原始改动的审查。
-
-`/task apply` 先展示补丁与验证状态，再确认是否应用到原项目的**未提交工作区**。原仓库 HEAD 变化、已跟踪文件变脏或补丁冲突都会拒绝；验证失败、跳过、过期时默认也拒绝。`/task apply --force` 只能跳过验证门槛，不能绕过冲突检查。`/task discard <id>` 再次确认后删除工具创建的 Worktree 及其中未应用的改动。
-
-Worktree 只隔离 Git 文件改动，**不是安全沙箱**：Shell 和外部 MCP 工具仍可能影响目录外的文件或服务。
-
-需要更严格的任务执行时，先把 `CORECODER_SANDBOX_IMAGE` 配置为**已在本机存在、来源可信的 Linux 镜像**，再执行 `/task start --sandbox <需求>`。创建 Worktree 前会检查本地 Docker 引擎和镜像，不自动拉取；每次 Shell 调用都须单独授权。任务内 Shell 与自动验证共用 Docker 执行器，每条命令启动独立容器：只挂载任务 Worktree，关闭网络，容器根目录只读，`/tmp` 为临时文件系统，以非 root 用户运行并限制 CPU、内存和进程数；任务 MCP 与宿主机 Hooks 禁用。Docker 不可用时直接报错，**不会悄悄退回宿主机执行**，恢复任务也会重新检查。模型 API 调用仍在宿主进程中，容器不继承宿主环境变量或模型 Key。
-
-镜像需预装项目所需工具。验证使用 Linux 命令（包括 Maven/Gradle 的 POSIX 包装脚本），不能直接运行 Windows `.bat` 或宿主机绝对路径；每条 Shell 命令从任务目录开始，容器内 `git` 也可能无法解析 Git Worktree 指向宿主机的 `.git` 元数据。容器仍可读取 Worktree 内的文件以及镜像自身内置的环境变量；这只降低宿主机风险，不是绝对安全承诺。详见[安全执行验收设计](evals/任务级安全执行验收设计.md)。
-
-## 分层规则
-
-可选的 Markdown 规则按优先级从低到高读取：`~/.corecoder/rules.md`（全局个人偏好）、`~/.corecoder/projects/<project-id>/rules.md`（此项目的个人规则）、仓库根目录的 `AGENTS.md`（项目共享规则）。执行 `/rules show` 可查看准确路径、内容和读取错误；任务模式中也能使用。个人项目规则按**原仓库路径**识别，因此同一项目的各个任务 Worktree 共用；项目共享规则则从任务 Worktree 中读取，不从原工作区读取；要让任务用到它，需先把 `AGENTS.md` 提交进 Git。
-
-每次用户发起新一轮对话时重新加载规则，当前轮的多个工具调用使用同一份快照。规则文件须为 UTF-8、非符号链接的普通文件，单个文件最多 8 KiB。用户本轮的明确要求优先于文件规则，具体项目规则优先于通用偏好。规则只是提示词上下文，**不是权限策略**：不能放开工具授权、关闭计划模式或绕过任务验证与应用检查；规则文本也不会存入会话历史。
-
-## 记忆、检索与确认后学习
-
-用 `/memory add <内容>` 保存当前项目的事实或决策；`/memory add --global <内容>` 保存跨项目记忆时会再次确认。`/memory list`、`/memory show <id>`、`/memory search <查询>` 用于查看和检索，`/memory forget <id>` 确认后删除，`/memory why` 显示上一轮实际选中的记忆，`/memory why <id>` 查看来源。行为约束应写在分层规则里，记忆只存事实；不要保存 API Key 等秘密。
-
-任务验证通过并正常执行 `/task apply` 后，CoreCoder 会询问是否额外调用一次模型，提出最多三条项目事实候选；拒绝不会调用模型，之后可用 `/task learn <id>` 补做。强制应用、验证过期或已丢弃的任务不能生成候选。模型只读取限量且经过过滤的改动和简短任务上下文，不读取原始 Shell 输出或完整聊天；过滤并非万无一失，入库前仍须人工检查。`/memory candidates` 查看待审核内容，`/memory accept <id> [修改后内容]` 确认后才作为当前项目记忆参与检索，`/memory reject <id>` 拒绝并清除候选文本。过期记忆可用 `/memory disable <id>` 停用并保留来源。约束未来行为的建议仍应写进规则，而非记忆。
-
-记忆独立保存在 `~/.corecoder/memory.sqlite3`，不进入 Git Worktree 或会话存档。每轮开始时在本地检索全局和当前项目记忆，最多注入三条相关结果，并限制总上下文长度。任务 Worktree 复用原仓库的项目身份，子 Agent 继承父 Agent 当轮的检索快照。`-p` 模式也能读取记忆，但只有交互命令能写入。记忆只是参考上下文，不授予工具权限，也不高于本轮要求和规则；若回答令人意外，可用 `/memory why` 核对来源。
-
-## 本地评测
-
-[`evals/`](evals/README.md) 集中放置 12 个小型编码任务、独立隐藏测试、运行与报告脚本，以及测试计划、原理、预期和结果。模拟模式先验证评测链路；真实模型评测需在一次性容器或虚拟机中运行。模拟通过率不能当作 Agent 能力提升。
-
-会话 ID 会先清洗成安全字符再拿去当文件名，存档统统落在 `~/.corecoder/sessions` 里，恶意会话名穿越不出去。undo 历史也一样落盘：快照写在 `~/.corecoder/checkpoints.json`，重启之后 `/undo` 照样能往回撤。`/tokens` 的费用估算读的是内置价目表，在 `~/.corecoder/pricing.json` 里写自己的价格就会盖掉对应条目，新模型、调价都不用等发版。
-
-## 权限
-
-只读工具（`read_file`、`glob`、`grep`、`todo_write`）模型一调就跑。会动手的那些（`edit_file`、`write_file`、`bash`，以及派生子 agent）先停下来等你点头，REPL 启动横幅里能看到当前是哪种模式：
-
-- REPL 里每次调用问一次：允许这一次、本工具一直允许、或者拒绝。「一直允许」按工具记下，写进 `~/.corecoder/permissions.json`，重启也有效；子 agent 继承同一层授权，活走到哪，许可跟到哪。
-- 一次性模式（`-p`）没人可问，改动类调用当场被拒，拒绝理由作为普通工具结果回给模型：循环绝不会卡在等一个永远不会来的输入上。要全部预授权就加 `--yes`（脚本、CI 场景）。
-- 判断本身是 `permissions.py` 里的纯逻辑，终端只是塞进来一个提问回调。不用 TTY 也能单测授权逻辑，或者直接搬进你自己的嵌入场景。
-
-## 计划模式
-
-REPL 里 `/plan` 开关计划模式。开着的时候，提示符变成 `(plan)`，一切改动类调用（写文件、编辑、bash、MCP 工具、子 agent）当场被拒：拒绝理由作为普通工具结果回给模型，让它用只读工具继续摸底，给出一份编号计划。计划看着没问题，敲 `approve`（或再敲一次 `/plan`）就把执行权交回去，agent 接着干活。机制上就是 `Agent` 身上的一个开关，加授权闸前面多出来的一支拒绝分支，授权闸本身一行没动；不落盘计划文件，会话之间也不记任何东西。
-
-## 钩子
-
-在 `~/.corecoder` 下放一个 `hooks.json`，就能让你自己的 shell 命令在每次工具调用前后跑起来，思路和 Claude Code 的 hooks 一致：
+项目可通过 `.corecoder/verify.json` 指定验证入口：
 
 ```json
 {
-  "PreToolUse":  [{"matcher": "bash", "command": "cat >> ~/.corecoder/audit.jsonl"}],
-  "PostToolUse": [{"matcher": "*",    "command": "cat >> ~/.corecoder/trace.jsonl"}]
+  "commands": [
+    {
+      "name": "tests",
+      "argv": ["python", "-m", "pytest"],
+      "timeout": 180
+    }
+  ]
 }
 ```
 
-每个钩子从 stdin 拿到这次调用的 JSON（`tool_name`、`tool_input`，post 钩子还带 `tool_response`）。matcher 是精确的工具名，留空或写 `*` 表示对所有工具生效。pre 钩子可以否决这次调用：退出码 2，它的 stderr 会作为理由回给模型，让它换条路走。post 钩子只观察，永远拦不住。钩子报错或超过十秒会被跳过并记一条警告：钩子是来帮忙的，没权力弄死循环。整个机制就是 `hooks.py` 一个文件，REPL 启动横幅会显示加载了几条。
+没有配置时，Cove 会探测已有的 Python、Node、Maven、Gradle 测试或 Lint 入口。命令按参数数组启动并设置超时；验证子进程不会继承模型 API Key，也不会自动安装缺失依赖。补丁或验证脚本改变后，旧验证结果会失效。
 
-两个能直接抄走的（命令里用了 `jq`，装一下就有）：
+## 分层规则与记忆
+
+可选的 UTF-8 Markdown 规则按以下顺序读取，越往后优先级越高：
+
+1. `~/.corecoder/rules.md`：全局个人偏好。
+2. `~/.corecoder/projects/<project-id>/rules.md`：本项目的私有偏好。
+3. 仓库根目录 `AGENTS.md`：项目共享规则。
+
+`/rules show` 可查看实际路径、规则内容和加载错误。任务模式复用原项目身份来查找私有规则，共享的 `AGENTS.md` 则从任务 Worktree 读取。规则只影响提示词上下文，**不能授予工具权限，也不能绕过验证**。
+
+记忆用于保存事实和决策，不用于存放行为约束。`/memory add <内容>` 手动保存项目记忆；`/memory add --global <内容>` 保存跨项目记忆。`/memory list`、`/memory search <查询>` 和 `/memory why [id]` 用于查看、检索和追溯来源。确认过的记忆保存在本地 `~/.corecoder/memory.sqlite3`，每轮只检索少量相关内容。
+
+任务验证通过并正常应用后，Cove 可询问是否额外调用一次模型，生成最多三条候选项目记忆。**候选不会自动入库。**使用 `/memory candidates` 审查，用 `/memory accept <id> [修改后内容]` 确认，或用 `/memory reject <id>` 拒绝；`/memory disable <id>` 可停用过期记忆并保留来源。候选内容的过滤是尽力而为，接受前仍应检查是否包含秘密或错误结论。
+
+## 执行轨迹、Docker 与安全边界
+
+`/task trace` 可查看当前任务，`/task trace <id>` 可查看已保存的任务。JSONL 轨迹记录模型轮次、Token、工具与授权结果、耗时、验证与修复状态、补丁摘要；**不记录**提示词、工具参数/输出、Shell 命令或验证日志。因此它适合定位失败阶段，不能完整重放任务。
+
+Git Worktree 只隔离 Git 文件改动，**不是 Shell 或 MCP 的安全沙箱**。需要更严格的任务执行时，将 `CORECODER_SANDBOX_IMAGE` 指向本机已有且来源可信的 Linux 镜像，再使用 `/task start --sandbox <需求>`。Cove 会在启动任务前检查 Docker 和镜像；不可用则直接失败，不会退回宿主机执行。
+
+在 Docker 任务中，每次 Shell 调用都要单独授权；Shell 和自动验证在独立容器中运行，仅挂载任务 Worktree、禁用网络、容器根目录只读、`/tmp` 为临时目录、以非 root 用户运行，并限制资源。任务 MCP 和宿主机 Hooks 被禁用；模型 API 调用仍在宿主机进行。镜像需预装项目所需工具。容器可降低宿主机风险，但**不能保证模型生成的代码绝对安全**。详见[安全执行验收设计](evals/任务级安全执行验收设计.md)。
+
+## 评测与开发
+
+[`evals/`](evals/README.md) 包含 12 个合成 Python 编码任务、独立隐藏测试、运行与报告脚本，以及[结果说明](evals/测试结果.md)。一次 72 次的 DeepSeek 对比（12 题 × 两组配置 × 3 次重复）中，常规隐藏测试两组均为 36/36；记忆特定边界要求在无相关规则/记忆时为 21/36，加入相关上下文后为 36/36。这只能说明**在当前合成题集上，对给定项目事实的遵循有所改善**；不能推断通用编码正确率提升、分别归因于规则或记忆，也没有覆盖 Java 项目。
+
+常用本地检查：
 
 ```bash
-# 1. lint 门：每次 edit/write 之后立刻对改动的文件跑快速 lint。
-#    模型同一回合就能看到输出，自己把低级错误修了，不用等 CI 回来。
-{
-  "PostToolUse": [{
-    "matcher": "edit_file",
-    "command": "f=$(jq -r .tool_input.file_path); ruff check \"$f\" 2>&1 | head -20"
-  }]
-}
-
-# 2. 写保护：指定路径一律不让 agent 碰。退出码 2 当场否决，
-#    拒绝原因会送到模型那边。
-{
-  "PreToolUse": [{
-    "matcher": "edit_file",
-    "command": "case \"$(jq -r .tool_input.file_path)\" in .env*|*/secrets/*|*.pem) echo 'that path is off-limits' >&2; exit 2;; esac"
-  }]
-}
+python -m pytest tests -q
+python -m pytest evals/test_evals.py -q
 ```
 
-两个例子都是纯 shell；除了 JSON 形状和退出码 2 否决这两个约定，没有任何 CoreCoder 特有的语法。
+主要源码位置：
 
-## MCP 服务器
+- `corecoder/agent.py`、`llm.py`、`context.py`：Agent 循环、模型调用和上下文管理。
+- `corecoder/tools/`、`permissions.py`、`mcp.py`、`hooks.py`：工具及执行闸门。
+- `corecoder/tasks.py`、`task_cli.py`、`workspace.py`、`verify.py`：任务生命周期、Worktree 与验证。
+- `corecoder/rules.py`、`memory.py`、`learning.py`：项目上下文与确认后学习。
+- `corecoder/trace.py`、`sandbox.py`：轨迹与可选容器执行。
+- `tests/`、`evals/`：回归测试与模型评测。
 
-在 `~/.corecoder` 下放一个 `mcp.json`，任何 MCP 服务器的工具就能通过 stdio 接进 agent，配置形状和 Claude Code 的一样：
+交互模式下输入 `/help` 可查看完整命令。仓库内的[源码阅读文章](article/00-index.md)来自原 CoreCoder 项目，介绍其基础实现。
 
-```json
-{
-  "mcpServers": {
-    "filesystem": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]}
-  }
-}
-```
+## 致谢与许可
 
-每个配好的服务器在启动时拉起一个子进程，握手、列出工具；每件工具都注册成 `mcp__<服务器>__<工具>`，钩子匹配和授权闸对它和内建工具一视同仁。MCP 工具不在只读名单里，模型要调，得先问过你。握手给十五秒，一次调用给六十秒；服务器挂了或者迟迟不应，那一次调用就以普通工具结果的形式报错，循环照常往下走。REPL 里的 `/mcp` 列出每台服务器的状态，`/mcp reconnect <名字>` 把挂掉的重新拉起：新进程、重新握手，agent 手里已有的工具不用重启就恢复可用。客户端只实现协议里工具那一小片（initialize、tools/list、tools/call），别的一概不碰，所以整块实现收在 `mcp.py` 一个文件里，两百四十行上下。没有 `mcp.json` 就没有 MCP，一切照旧。想直接跑起来的话，[`examples/mcp_filesystem.md`](examples/mcp_filesystem.md) 给了一个最小配置：MCP 官方的参考文件系统服务器，只暴露一个目录，照样过授权闸。
-
-## 相关项目
-
-如果你读 CoreCoder 读得还顺，下面几个我做的 agent / LLM 系统方向的工具也许用得上：
-
-- **[RepoWiki](https://github.com/he-yufeng/RepoWiki)** — 被丢进一个陌生代码库？它给你一份带「从哪读起」路径的 wiki，一个可自托管的 DeepWiki 替代。
-- **[FindJobs-Agent](https://github.com/he-yufeng/FindJobs-Agent)** — 别再手动刷招聘网站：它按你的简历给岗位排序，还能跑模拟面试。
-- **[ContractGuard](https://github.com/he-yufeng/ContractGuard)** — 签字前先把有风险的条款挑出来：它读合同、标出危险点。
-- **[GitSense](https://github.com/he-yufeng/GitSense)** — 想给开源做贡献？它帮你找到值得做的 issue，还能估你的 PR 多大概率被合。
-- **[CodeABC](https://github.com/he-yufeng/CodeABC)** — 不会写代码也能看懂一个项目，专给小白做的。
-
-## 贡献 / License
-
-动手之前先跑一遍 `pytest tests/ -q`、`ruff check` 和 `compileall`，绿了再提。MIT License，欢迎 fork 拿去造更好的东西，能在 README 里留一句出处就更好。
-
----
-
-作者 [何宇峰](https://github.com/he-yufeng)，曾任职 Moonshot AI (Kimi)。早前写过一篇相当完整的 [Claude Code 源码分析](article/claude-code-source-analysis.md)，这个项目是它的动手版：那篇带你读懂，这个带你重建。
-
-> CoreCoder 原名 NanoCoder，为避免和 [Nano-Collective/nanocoder](https://github.com/Nano-Collective/nanocoder) 混淆而改名，旧链接会自动跳到这里。
+Cove 基于 [何宇峰](https://github.com/he-yufeng) 创建的 [CoreCoder](https://github.com/he-yufeng/CoreCoder) 继续开发，遵循 MIT License。原版权声明保留在 [LICENSE](LICENSE) 中，Git 历史也保留了上游提交。本仓库新增的任务工作流、个性化、轨迹、安全执行与评测能力已在上文说明。
