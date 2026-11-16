@@ -12,7 +12,6 @@ from pathlib import Path
 
 from .tasks import Task, TaskManager, _git
 
-
 MAX_DIFF_CHARS = 16000
 MAX_CANDIDATE_CHARS = 200
 _SENSITIVE_PATH = re.compile(
@@ -111,7 +110,8 @@ def propose(task: Task, manager: TaskManager, llm) -> list[tuple[str, str]]:
     except (json.JSONDecodeError, TypeError) as exc:
         raise ValueError("Learning model returned invalid JSON; nothing was saved.") from exc
     if not isinstance(data, dict) or not isinstance(data.get("candidates"), list):
-        raise ValueError("Learning model returned invalid candidates; nothing was saved.")
+        # Invalid model output follows the same ValueError contract as malformed JSON.
+        raise ValueError("Learning model returned invalid candidates; nothing was saved.")  # noqa: TRY004
     suggestions = []
     seen = set()
     for item in data["candidates"][:3]:

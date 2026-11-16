@@ -11,8 +11,8 @@ from .permissions import Permission
 from .rules import RuleLoader, project_id
 from .sandbox import SandboxBashTool, SandboxExecutor
 from .tasks import TaskManager
-from .trace import TaskTrace, describe, latest_issue
 from .tools import workspace_tools
+from .trace import TaskTrace, describe, latest_issue
 from .verify import discover, run
 from .workspace import child_environment
 
@@ -250,15 +250,18 @@ class TaskController:
                 self.task, self.agent = None, None
                 self.trace = None
                 self.sandbox = None
-                if task.learning_eligible and getattr(self.ordinary, "memory_store", None) is not None:
-                    if self._confirm("Generate reviewable memory candidates with the model? [y/N] "):
-                        try:
-                            self.learn(task)
-                        except Exception as exc:  # noqa: BLE001
-                            self.console.print(
-                                f"[yellow]Applied, but learning suggestions failed ({type(exc).__name__}). "
-                                f"Retry with /task learn {task.id}.[/yellow]"
-                            )
+                if (
+                    task.learning_eligible
+                    and getattr(self.ordinary, "memory_store", None) is not None
+                    and self._confirm("Generate reviewable memory candidates with the model? [y/N] ")
+                ):
+                    try:
+                        self.learn(task)
+                    except Exception as exc:  # noqa: BLE001
+                        self.console.print(
+                            f"[yellow]Applied, but learning suggestions failed ({type(exc).__name__}). "
+                            f"Retry with /task learn {task.id}.[/yellow]"
+                        )
             return None
         raise ValueError(
             "Usage: /task start [--sandbox] <requirement>|status|list|resume <id>|trace [id]|diff|verify|"

@@ -18,8 +18,8 @@ from .config import Config
 from .hooks import load_hooks
 from .llm import LLM, LiteLLM
 from .mcp import load_mcp_tools
-from .rules import project_id
 from .permissions import DEFAULT_STORE, Permission
+from .rules import project_id
 from .session import list_sessions, load_session, save_session
 from .task_cli import TaskController
 from .tools import ALL_TOOLS

@@ -4,6 +4,7 @@ import json
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
+from typing import ClassVar
 
 from corecoder.agent import Agent
 from corecoder.llm import LLMResponse, ToolCall
@@ -15,7 +16,6 @@ from corecoder.tasks import TaskManager
 from corecoder.tools.agent import AgentTool
 from corecoder.tools.base import Tool
 from corecoder.trace import TaskTrace, latest_issue
-
 
 TASK_ID = "a1b2c3d4e5f6"
 SECRET = "sk-private-test-value"
@@ -61,7 +61,7 @@ def test_trace_recovers_after_partial_last_line(tmp_path):
 class WriteTool(Tool):
     name = "write_file"
     description = "write"
-    parameters = {"type": "object", "properties": {"content": {"type": "string"}}}
+    parameters: ClassVar[dict] = {"type": "object", "properties": {"content": {"type": "string"}}}
 
     def execute(self, content):
         return content

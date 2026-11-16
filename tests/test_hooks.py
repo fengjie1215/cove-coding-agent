@@ -11,7 +11,6 @@ from corecoder.tools.agent import AgentTool
 from corecoder.tools.write import WriteFileTool
 
 
-
 def _write_call(call_id, path):
     return ToolCall(id=call_id, name="write_file",
                     arguments={"file_path": str(path), "content": "x\n"})

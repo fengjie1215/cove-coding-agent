@@ -17,7 +17,6 @@ from pathlib import Path
 
 from .context import _approx_tokens
 
-
 MAX_CONTENT_CHARS = 2000
 MAX_INJECTED_TOKENS = 1200
 MAX_HITS = 3

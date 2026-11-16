@@ -21,11 +21,11 @@ from .memory import MemorySnapshot, MemoryStore
 from .permissions import Permission
 from .prompt import PLAN_MODE_PROMPT, system_prompt
 from .rules import RuleLoader, RuleSnapshot, project_id
-from .trace import TaskTrace
 from .tools import ALL_TOOLS
 from .tools.agent import AgentTool
 from .tools.base import Tool
 from .tools.todo import TodoWriteTool
+from .trace import TaskTrace
 
 
 class Agent:

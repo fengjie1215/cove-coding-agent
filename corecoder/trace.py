@@ -11,7 +11,6 @@ import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
-
 _TASK_ID = re.compile(r"[0-9a-f]{12}\Z")
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _IDENTIFIER = re.compile(r"[A-Za-z][A-Za-z0-9_]{0,63}\Z")
@@ -64,19 +63,11 @@ class TaskTrace:
             elif key in _TEXT and isinstance(value, str):
                 if key == "tool":
                     row[key] = tool_label(value)
-                elif key == "turn_id" and re.fullmatch(r"[0-9a-f]{12}", value):
-                    row[key] = value
-                elif key == "role" and value in ("main", "subagent"):
-                    row[key] = value
-                elif key == "outcome" and value in (
+                elif key == "turn_id" and re.fullmatch(r"[0-9a-f]{12}", value) or key == "role" and value in ("main", "subagent") or key == "outcome" and value in (
                     "completed", "round_limit", "interrupted", "error", "passed",
                     "failed", "environment", "timeout", "missing", "skipped", "stale",
                     "allowed", "denied", "blocked_hook", "blocked_plan", "no_change",
-                ):
-                    row[key] = value
-                elif key == "error_type" and _IDENTIFIER.fullmatch(value):
-                    row[key] = value
-                elif key == "reason" and value in _REASONS:
+                ) or key == "error_type" and _IDENTIFIER.fullmatch(value) or key == "reason" and value in _REASONS:
                     row[key] = value
             elif key == "diff_digest" and isinstance(value, str) and _SHA256.fullmatch(value):
                 row[key] = value

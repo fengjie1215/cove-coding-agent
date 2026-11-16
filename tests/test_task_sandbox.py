@@ -5,13 +5,14 @@ import os
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
+from typing import ClassVar
 
 import pytest
 
-from corecoder.permissions import Permission
 from corecoder.agent import Agent
 from corecoder.llm import LLMResponse, ToolCall
 from corecoder.memory import MemoryStore
+from corecoder.permissions import Permission
 from corecoder.rules import RuleLoader
 from corecoder.sandbox import SandboxBashTool, SandboxExecutor
 from corecoder.task_cli import TaskController
@@ -107,7 +108,8 @@ def test_executor_flags_paths_and_no_host_env(tmp_path, monkeypatch):
     argv, kwargs = calls[-1]
     assert "--network=none" in argv and "--read-only" in argv
     assert "--cap-drop=ALL" in argv and "--pull=never" in argv
-    assert "--user=65534:65534" in argv
+    expected_user = f"{os.getuid()}:{os.getgid()}" if hasattr(os, "getuid") else "65534:65534"
+    assert f"--user={expected_user}" in argv
     assert "--workdir" in argv and "/workspace/src" in argv
     assert "secret-do-not-pass" not in repr(argv) and "env" not in kwargs
     assert argv[-3:] == ["sh", "-lc", "pwd"]
@@ -165,7 +167,7 @@ def test_sandbox_task_persists_mode_and_disables_host_extensions(tmp_path, monke
     class MCPTool(Tool):
         name = "mcp__external"
         description = "external"
-        parameters = {"type": "object", "properties": {}}
+        parameters: ClassVar[dict] = {"type": "object", "properties": {}}
 
         def execute(self):
             return "external"
@@ -233,8 +235,8 @@ def test_posix_wrapper_selected_for_sandbox_digest(tmp_path, monkeypatch):
 
 
 def test_sandbox_bash_does_not_call_host_shell(tmp_path, monkeypatch):
-    from corecoder.workspace import Workspace
     from corecoder.checkpoints import CheckpointStore
+    from corecoder.workspace import Workspace
 
     root = tmp_path / "tree"
     root.mkdir()

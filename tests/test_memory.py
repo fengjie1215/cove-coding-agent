@@ -4,13 +4,13 @@ import subprocess
 from types import SimpleNamespace
 
 from corecoder.agent import Agent
+from corecoder.context import _approx_tokens
 from corecoder.llm import LLMResponse, ToolCall
 from corecoder.memory import MAX_INJECTED_TOKENS, MemoryStore
 from corecoder.rules import RuleLoader, project_id
-from corecoder.context import _approx_tokens
-from corecoder.tools.agent import AgentTool
 from corecoder.task_cli import TaskController
 from corecoder.tasks import TaskManager
+from corecoder.tools.agent import AgentTool
 from tests.conftest import repl_with
 
 
