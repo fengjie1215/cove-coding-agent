@@ -12,7 +12,7 @@
 [![Python](https://img.shields.io/badge/python-3.10+-blue)](https://python.org)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Tests](https://github.com/he-yufeng/CoreCoder/actions/workflows/ci.yml/badge.svg)](https://github.com/he-yufeng/CoreCoder/actions)
-[![engine](https://img.shields.io/badge/engine-1499_LoC-blue)](article/00-index_EN.md)
+[![engine](https://img.shields.io/badge/engine-1503_LoC-blue)](article/00-index_EN.md)
 [![essays](https://img.shields.io/badge/source--reading-8_bilingual-orange)](article/00-index_EN.md)
 
 </div>
@@ -25,7 +25,7 @@
 
 | | CoreCoder | Claude Code | aider | nanoGPT |
 |---|---|---|---|---|
-| Lines of code | 1,499 engine / 4,879 total | hundreds of thousands (closed) | tens of thousands of Python | ~600 (two files) |
+| Lines of code | 1,503 engine / 5,108 total | hundreds of thousands (closed) | tens of thousands of Python | ~600 (two files) |
 | Time to read it all | one afternoon | can't (closed) | a few days of slogging | one afternoon |
 | Breakpoint, change, rerun? | yes, every line | no | yes, but there's a lot | yes |
 | What it's for | understand one, then fork your own | production coding assistant | terminal pair-programming | minimal GPT for teaching |
@@ -36,7 +36,7 @@ The nanoGPT column is there as a reference point: minimal, readable, but it teac
 
 I've always felt coding agents get talked about as if they were arcane. Strip a tool like Claude Code or Cursor all the way down and the core is a `while` loop wrapped around a large model, plus seven or eight tools that let it actually do things. The hard part was never the loop; it's everything the loop has to cope with once it meets the real world. CoreCoder is the minimal version that writes that core out honestly.
 
-The engine (loop, model interface, context, tools, sessions) is 1,499 lines once you drop blank lines and comments. With task isolation, validation, layered rules, confirmed learning and task traces, the package is 33 files: 4,879 physical lines, 4,154 net. The extra workflows are documented below.
+The engine (loop, model interface, context, tools, sessions) is 1,503 lines once you drop blank lines and comments. With task isolation, validation, layered rules, confirmed learning, task traces and opt-in sandbox tasks, the package is 34 files: 5,108 physical lines, 4,363 net. The extra workflows are documented below.
 
 And it really runs: reads and writes files, executes shell, spawns sub-agents, compacts context in three tiers, and tells you the tokens and dollars a run burned whenever you ask. Anything that would mutate your disk or run a command stops for your consent first. The point of it running is to keep the walkthrough grounded in working code.
 
@@ -87,11 +87,11 @@ Laid out flat, the whole project is this big. Skim it before you clone and you'l
 
 ```
 corecoder/
-├── agent.py        agent loop + parallel tool exec       362 lines   ← start here
+├── agent.py        agent loop + parallel tool exec       366 lines   ← start here
 ├── llm.py          streaming client + retry + cost        349 lines
 ├── context.py      three-tier context compaction          220 lines
 ├── session.py      save / resume + path-traversal guard    97 lines
-├── permissions.py  consent for mutating tools              75 lines
+├── permissions.py  consent for mutating tools              89 lines
 ├── hooks.py        Pre/PostToolUse shell hooks             91 lines
 ├── shell.py        POSIX shell routing (Git Bash on Windows) 61 lines
 ├── mcp.py          MCP stdio client for external tools    237 lines
@@ -99,9 +99,10 @@ corecoder/
 ├── rules.py        layered user and project rules          96 lines
 ├── memory.py       approved memory + local retrieval      468 lines
 ├── learning.py     verified-task memory suggestions       133 lines
-├── cli.py          REPL + slash commands + one-shot       646 lines
+├── cli.py          REPL + slash commands + one-shot       657 lines
 ├── config.py       env-var config                          55 lines
 ├── checkpoints.py  /undo snapshot and restore               93 lines
+├── sandbox.py      opt-in task Docker execution           141 lines
 ├── demo.py         offline end-to-end demo                 101 lines
 └── tools/
     ├── bash.py       shell + dangerous-command gate + cd  221 lines
@@ -180,9 +181,9 @@ llm = LLM(model="deepseek-chat", api_key="sk-...", base_url="https://api.deepsee
 print(Agent(llm=llm).chat("find every TODO comment in this project and list them"))
 ```
 
-Going deeper, the directions are out in the open too. None of the following is in CoreCoder, by design, not because it's unfinished. Flip it around and each one is an entry point you can carry into a real tool of your own:
+Going deeper, several directions remain open. The optional task container improves execution isolation, but it does not make the agent a hardened security product. Each item below is an entry point for a stronger tool of your own:
 
-- **The dangerous-command blocking in bash is just a regex blacklist.** It guards against slips, not a security sandbox. Facing untrusted input means reaching for seccomp or container isolation. This is the hardest of the four; it goes all the way down to the syscall and isolation layer.
+- **The dangerous-command blocking in bash is just a regex blacklist.** It guards against slips, not adversarial commands. The opt-in Docker mode narrows exposure, but stronger isolation, policy enforcement, and security evaluation are still open work.
 - **Retry is only exponential backoff.** No fallback model, no hard dollar budget. Follow `llm.py` down and add a fallback model chain plus a stop-on-over-budget gate; the change stays mostly inside that one file.
 - **Sub-agents only run the plainest synchronous execution.** Make it async or a streaming executor and you close the exact gap the fifth essay identifies between this and how production agents stream execution.
 - **No RAG, and the MCP client speaks tools only.** Retrieval-based code location for big repos is still open, and `mcp.py` leaves resources and prompts unimplemented on purpose. Either one is a real way to grow from a minimal core into your own stronger agent.
@@ -202,7 +203,7 @@ Inside the REPL, `/help` lists everything; these are the ones you'll reach for:
 /memory add [--global] <text>  save a project or global memory
 /memory list [--project|--global]|show <id>|search <query>|why [id]|forget <id>
 /memory candidates|accept <id> [edited text]|reject <id>|disable <id>
-/task start <request>  start an isolated coding task
+/task start [--sandbox] <request>  start an isolated coding task
 /task status|list|resume <id>|trace [id]|diff|verify|apply [--force]|learn <id>|leave|discard <id>
 /undo            revert the most recent file change
 /plan            toggle plan mode (read-only, then a plan to approve)
@@ -222,6 +223,10 @@ After a changed turn, CoreCoder proposes validation commands from `.corecoder/ve
 `/task apply` shows the diff and validation state, then asks before applying it as **uncommitted** changes to the original repository. It refuses changed original HEAD, dirty tracked files and patch conflicts. Failed, skipped or stale checks also block normal apply; `/task apply --force` bypasses only that validation gate, not conflict checks. `/task discard <id>` confirms before removing the created worktree and its unapplied changes.
 
 Worktrees isolate Git changes, **not execution**. Shell commands and external MCP tools can still affect files and services outside the worktree.
+
+For an opt-in stricter task, configure `CORECODER_SANDBOX_IMAGE` to a **trusted, already-local Linux image**, then use `/task start --sandbox <request>`. CoreCoder checks for a local Docker engine and image before creating the worktree and never pulls automatically. In this mode, each Shell call requires fresh approval; Shell and automatic verification run in a container with only the task worktree mounted, no network, a read-only container root, a temporary `/tmp`, a non-root user, and CPU/memory/process limits. Task MCP tools and host hooks are disabled. An unavailable Docker engine or image fails closed—there is no host fallback. Resume checks Docker again. The model API call itself stays on the host; the container is not given the host environment or model API keys. Only the command's output and exit status return to the agent.
+
+The image must contain the tools your project needs. Verification uses Linux commands (including POSIX Maven/Gradle wrappers); a Windows `.bat` command or host-absolute executable path will not work in this mode. Each Shell call starts in the task directory, and `git` inside the container may not resolve the Git Worktree's host `.git` pointer. Worktree files and image-baked environment variables remain visible to code inside the container. Docker reduces exposure but is not a guarantee against malicious images, daemon compromise, or every side effect. See [sandbox acceptance design](evals/任务级安全执行验收设计.md).
 
 ## Layered rules
 

@@ -46,7 +46,7 @@ def _manifest_root(worktree: Path, cwd: Path) -> Path:
     return cwd
 
 
-def discover(worktree: Path, cwd: Path) -> tuple[list[VerifyCommand], str]:
+def discover(worktree: Path, cwd: Path, target_platform: str | None = None) -> tuple[list[VerifyCommand], str]:
     """Return commands and a digest including config/script contents."""
     root = _manifest_root(worktree.resolve(), cwd.resolve())
     config = root / ".corecoder" / "verify.json"
@@ -70,18 +70,20 @@ def discover(worktree: Path, cwd: Path) -> tuple[list[VerifyCommand], str]:
             commands.append(VerifyCommand(entry.get("name", f"check-{i+1}"), argv, str(root), timeout))
     elif (root / "pom.xml").exists():
         tracked.append(root / "pom.xml")
-        wrapper = root / ("mvnw.cmd" if os.name == "nt" else "mvnw")
+        windows = os.name == "nt" and target_platform != "posix"
+        wrapper = root / ("mvnw.cmd" if windows else "mvnw")
         if not wrapper.exists():
-            wrapper = root / ("mvnw.bat" if os.name == "nt" else "mvnw")
+            wrapper = root / ("mvnw.bat" if windows else "mvnw")
         argv = [str(wrapper)] if wrapper.exists() else ["mvn"]
         if wrapper.exists():
             tracked.append(wrapper)
         commands.append(VerifyCommand("Maven tests", argv + ["test"], str(root), 300))
     elif any((root / n).exists() for n in ("build.gradle", "build.gradle.kts")):
         tracked += [root / n for n in ("build.gradle", "build.gradle.kts") if (root / n).exists()]
-        wrapper = root / ("gradlew.bat" if os.name == "nt" else "gradlew")
+        windows = os.name == "nt" and target_platform != "posix"
+        wrapper = root / ("gradlew.bat" if windows else "gradlew")
         if not wrapper.exists():
-            wrapper = root / ("gradlew.cmd" if os.name == "nt" else "gradlew")
+            wrapper = root / ("gradlew.cmd" if windows else "gradlew")
         argv = [str(wrapper)] if wrapper.exists() else ["gradle"]
         if wrapper.exists():
             tracked.append(wrapper)
@@ -125,7 +127,7 @@ def discover(worktree: Path, cwd: Path) -> tuple[list[VerifyCommand], str]:
     return commands, digest.hexdigest()
 
 
-def run(commands: list[VerifyCommand], worktree: Path) -> list[VerifyResult]:
+def run(commands: list[VerifyCommand], worktree: Path, executor=None) -> list[VerifyResult]:
     results = []
     for command in commands:
         cwd = Path(command.cwd).resolve()
@@ -135,19 +137,22 @@ def run(commands: list[VerifyCommand], worktree: Path) -> list[VerifyResult]:
         argv = list(command.argv)
         executable = argv[0]
         local_executable = (cwd / executable).resolve()
-        if local_executable.is_file() and local_executable.is_relative_to(worktree.resolve()):
+        if executor is None and local_executable.is_file() and local_executable.is_relative_to(worktree.resolve()):
             argv[0] = str(local_executable)
-        elif not Path(executable).is_file() and not shutil.which(executable):
+        elif executor is None and not Path(executable).is_file() and not shutil.which(executable):
             results.append(VerifyResult(command.name, command.argv, None, 0, f"Executable not found: {executable}", "missing"))
             break
         try:
-            proc = subprocess.run(
-                argv, cwd=cwd, env=child_environment(),
-                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                text=True, encoding="utf-8", errors="replace",
-                timeout=command.timeout, shell=False, check=False,
-            )
-            output = proc.stdout or ""
+            if executor is None:
+                proc = subprocess.run(
+                    argv, cwd=cwd, env=child_environment(),
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    text=True, encoding="utf-8", errors="replace",
+                    timeout=command.timeout, shell=False, check=False,
+                )
+            else:
+                proc = executor.run_argv(argv, cwd, command.timeout)
+            output = (proc.stdout or "") + (proc.stderr or "")
             if len(output) > 6000:
                 output = output[:2500] + "\n... output truncated ...\n" + output[-2500:]
             lower = output.lower()
@@ -155,6 +160,8 @@ def run(commands: list[VerifyCommand], worktree: Path) -> list[VerifyResult]:
                 "no module named pytest", "no module named ruff",
                 "command not found", "is not recognized as an internal or external command",
                 "cannot find module", "could not find or load main class",
+                "cannot connect to the docker daemon", "error response from daemon",
+                "permission denied while trying to connect to the docker api",
             ))
             kind = "passed" if proc.returncode == 0 else ("environment" if environment_failure else "failed")
             results.append(VerifyResult(
@@ -173,6 +180,12 @@ def run(commands: list[VerifyCommand], worktree: Path) -> list[VerifyResult]:
             ))
             break
         except OSError as e:
+            results.append(VerifyResult(
+                command.name, command.argv, None,
+                round(time.monotonic()-start, 2), str(e), "environment",
+            ))
+            break
+        except ValueError as e:
             results.append(VerifyResult(
                 command.name, command.argv, None,
                 round(time.monotonic()-start, 2), str(e), "environment",

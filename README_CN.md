@@ -12,7 +12,7 @@
 [![Python](https://img.shields.io/badge/python-3.10+-blue)](https://python.org)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Tests](https://github.com/he-yufeng/CoreCoder/actions/workflows/ci.yml/badge.svg)](https://github.com/he-yufeng/CoreCoder/actions)
-[![engine](https://img.shields.io/badge/engine-1499_LoC-blue)](article/)
+[![engine](https://img.shields.io/badge/engine-1503_LoC-blue)](article/)
 [![源码导读](https://img.shields.io/badge/源码导读-8篇双语-orange)](article/)
 
 </div>
@@ -25,7 +25,7 @@
 
 | | CoreCoder | Claude Code | aider | nanoGPT |
 |---|---|---|---|---|
-| 代码量 | 引擎 1499 行 / 整包 4879 行 | 几十万行（闭源） | 数万行 Python | 约 600 行（两个文件） |
+| 代码量 | 引擎 1503 行 / 整包 5108 行 | 几十万行（闭源） | 数万行 Python | 约 600 行（两个文件） |
 | 读完要多久 | 一个下午 | 读不了（闭源） | 得啃几天 | 一个下午 |
 | 能不能下断点改了再跑 | 能，每一行 | 不能 | 能，但量大 | 能 |
 | 定位 | 读懂并 fork 出你自己的 agent | 生产级编程助手 | 终端结对编程 | 教学用最小 GPT |
@@ -36,7 +36,7 @@ nanoGPT 那一列是拿来对照的：它最小、可读，但教的是训一个
 
 我一直觉得 coding agent 被讲得太玄了。把 Claude Code、Cursor 这类工具扒到底，核心是一个 while 循环套着一个大模型，外加七八个让它能真正动手的工具。难的从来不是这个循环，而是循环跑进真实世界以后要兜的那些底。CoreCoder 就是把这个核心老老实实写出来的最小版本。
 
-引擎部分（循环、模型接口、上下文、工具、会话）去掉空行和注释是 1499 行。加入任务隔离、验证、分层规则、确认后学习与任务轨迹后，整包 33 个文件、物理 4879 行、净 4154 行。新增工作流见下文。
+引擎部分（循环、模型接口、上下文、工具、会话）去掉空行和注释是 1503 行。加入任务隔离、验证、分层规则、确认后学习、任务轨迹与可选容器执行后，整包 34 个文件、物理 5108 行、净 4363 行。新增工作流见下文。
 
 它真能跑：读写文件、执行 shell、派子 agent、分三层压上下文，还能随时把这趟烧掉的 token 和美元数报给你。任何要动你磁盘、要跑命令的调用，都会先停下来等你点头。这份「注释」背后有真实可运行的实现。
 
@@ -87,11 +87,11 @@ corecoder -p "给 parse_config() 加错误处理"   # 一次性模式，干完�
 
 ```
 corecoder/
-├── agent.py        agent 主循环 + 并行工具执行       362 行   ← 从这里开始读
+├── agent.py        agent 主循环 + 并行工具执行       366 行   ← 从这里开始读
 ├── llm.py          流式客户端 + 重试 + 成本统计       349 行
 ├── context.py      三层上下文压缩                     220 行
 ├── session.py      会话存盘 / 续聊 + 路径穿越防护      97 行
-├── permissions.py  改动类工具的用户授权                75 行
+├── permissions.py  改动类工具的用户授权                89 行
 ├── hooks.py        工具调用前后的用户 shell 钩子        91 行
 ├── shell.py        POSIX shell 路由（Windows 走 Git Bash） 61 行
 ├── mcp.py          MCP stdio 客户端，接外部工具       237 行
@@ -99,9 +99,10 @@ corecoder/
 ├── rules.py        分层用户与项目规则                    96 行
 ├── memory.py       已确认记忆与本地检索                 468 行
 ├── learning.py     已验证任务的记忆候选                 133 行
-├── cli.py          REPL + 斜杠命令 + 一次性模式        646 行
+├── cli.py          REPL + 斜杠命令 + 一次性模式        657 行
 ├── config.py       环境变量配置                        55 行
 ├── checkpoints.py  /undo 快照与回滚                      93 行
+├── sandbox.py      可选的任务级 Docker 执行             141 行
 ├── demo.py         离线端到端演示                       101 行
 └── tools/
     ├── bash.py       shell + 危险命令闸 + cd 追踪      221 行
@@ -180,9 +181,9 @@ llm = LLM(model="deepseek-chat", api_key="sk-...", base_url="https://api.deepsee
 print(Agent(llm=llm).chat("找出项目里所有 TODO 注释并列出来"))
 ```
 
-往深里做，方向也都摆在明处。下面这些 CoreCoder 都没做，是设计取舍，不是没做完；换个角度，每一条都是你能接着往下做、把它推向更强的入口：
+往深里做，方向也都摆在明处。可选的任务容器改善了执行隔离，但还不是经过完整安全审计的产品；下面每一条仍是你能接着往下做、把它推向更强的入口：
 
-- **bash 的危险命令拦截只是正则黑名单。** 防手滑，不是安全沙箱。要面对不可信输入，就得上 seccomp 或容器隔离。这条最硬，要一路走到系统调用和隔离那一层。
+- **bash 的危险命令拦截只是正则黑名单。** 它能防手滑，却挡不住对抗性命令。可选 Docker 模式缩小了风险范围，但更强的隔离、策略执行和安全评测仍待完善。
 - **重试只做了指数退避。** 没有 fallback 模型，也没有美元硬预算。顺着 `llm.py` 往下，加一条 fallback 模型链和超预算自动停的闸，改动基本就集中在这一个文件。
 - **子 agent 只有最朴素的同步执行。** 做成异步或流式执行器，正好补上第五篇点名的、相对生产级 agent 流式执行的那段差距。
 - **不做 RAG，MCP 客户端也只讲工具这一小片。** 给大仓加检索式代码定位还空着，`mcp.py` 也特意没实现 resources 和 prompts。随便挑一个，都是从最小核心往你自己的更强 agent 扩的真实方向。
@@ -202,7 +203,7 @@ README 只给方向，每条的代码细节第七篇接着讲。挑一个动手�
 /memory add [--global] <内容>  保存项目或全局记忆
 /memory list [--project|--global]|show <id>|search <查询>|why [id]|forget <id>
 /memory candidates|accept <id> [修改后内容]|reject <id>|disable <id>
-/task start <需求>  创建隔离的编码任务
+/task start [--sandbox] <需求>  创建隔离的编码任务
 /task status|list|resume <id>|trace [id]|diff|verify|apply [--force]|learn <id>|leave|discard <id>
 /undo            撤销最近一次文件改动
 /plan            开关计划模式（只读摸底，再交出待批准的计划）
@@ -222,6 +223,10 @@ Agent 修改文件后，会优先读取项目的 `.corecoder/verify.json`，否�
 `/task apply` 先展示补丁与验证状态，再确认是否应用到原项目的**未提交工作区**。原仓库 HEAD 变化、已跟踪文件变脏或补丁冲突都会拒绝；验证失败、跳过、过期时默认也拒绝。`/task apply --force` 只能跳过验证门槛，不能绕过冲突检查。`/task discard <id>` 再次确认后删除工具创建的 Worktree 及其中未应用的改动。
 
 Worktree 只隔离 Git 文件改动，**不是安全沙箱**：Shell 和外部 MCP 工具仍可能影响目录外的文件或服务。
+
+需要更严格的任务执行时，先把 `CORECODER_SANDBOX_IMAGE` 配置为**已在本机存在、来源可信的 Linux 镜像**，再执行 `/task start --sandbox <需求>`。创建 Worktree 前会检查本地 Docker 引擎和镜像，不自动拉取；每次 Shell 调用都须单独授权。任务内 Shell 与自动验证共用 Docker 执行器，每条命令启动独立容器：只挂载任务 Worktree，关闭网络，容器根目录只读，`/tmp` 为临时文件系统，以非 root 用户运行并限制 CPU、内存和进程数；任务 MCP 与宿主机 Hooks 禁用。Docker 不可用时直接报错，**不会悄悄退回宿主机执行**，恢复任务也会重新检查。模型 API 调用仍在宿主进程中，容器不继承宿主环境变量或模型 Key。
+
+镜像需预装项目所需工具。验证使用 Linux 命令（包括 Maven/Gradle 的 POSIX 包装脚本），不能直接运行 Windows `.bat` 或宿主机绝对路径；每条 Shell 命令从任务目录开始，容器内 `git` 也可能无法解析 Git Worktree 指向宿主机的 `.git` 元数据。容器仍可读取 Worktree 内的文件以及镜像自身内置的环境变量；这只降低宿主机风险，不是绝对安全承诺。详见[安全执行验收设计](evals/任务级安全执行验收设计.md)。
 
 ## 分层规则
 

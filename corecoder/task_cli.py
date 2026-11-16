@@ -1,6 +1,7 @@
 """Interactive /task lifecycle; never used by one-shot mode."""
 
 import json
+import os
 from pathlib import Path
 
 from .agent import Agent
@@ -8,6 +9,7 @@ from .hooks import Hooks
 from .learning import propose
 from .permissions import Permission
 from .rules import RuleLoader, project_id
+from .sandbox import SandboxBashTool, SandboxExecutor
 from .tasks import TaskManager
 from .trace import TaskTrace, describe, latest_issue
 from .tools import workspace_tools
@@ -19,11 +21,12 @@ class TaskController:
     def __init__(
         self, ordinary_agent: Agent, console, ask, prompt,
         manager: TaskManager | None = None, tool_factory=None,
-        max_rounds: int = 50, verification_guard=None,
+        max_rounds: int = 50, verification_guard=None, strict_ask=None,
     ):
         self.ordinary = ordinary_agent
         self.console = console
         self.ask = ask
+        self.strict_ask = strict_ask or ask
         self.prompt = prompt
         self.manager = manager if manager is not None else TaskManager()
         self.tool_factory = tool_factory or workspace_tools
@@ -32,6 +35,7 @@ class TaskController:
         self.task = None
         self.agent = None
         self.trace = None
+        self.sandbox = None
 
     def _event(self, event: str, **fields) -> None:
         trace = getattr(self, "trace", None)
@@ -58,15 +62,25 @@ class TaskController:
             raise RuntimeError("Task is not active or its worktree is missing.")
         workspace = task.workspace(self.manager.tasks_dir)
         trace = TaskTrace(self.manager.tasks_dir, task.id)
-        mcp = [tool for tool in self.ordinary.tools if tool.name.startswith("mcp__")]
-        hooks = self.ordinary.hooks
+        sandbox = None
+        if task.sandbox_image:
+            SandboxExecutor.preflight(task.sandbox_image)
+            sandbox = SandboxExecutor(workspace.root, task.sandbox_image)
+            tools = [SandboxBashTool(workspace, sandbox) if tool.name == "bash" else tool
+                     for tool in workspace_tools(workspace)]
+        else:
+            tools = self.tool_factory(workspace)
+        mcp = [] if sandbox else [tool for tool in self.ordinary.tools if tool.name.startswith("mcp__")]
+        hooks = None if sandbox else self.ordinary.hooks
         task_hooks = Hooks(hooks.pre, hooks.post, str(workspace.cwd), child_environment()) if hooks else None
         agent = Agent(
-            llm=self.ordinary.llm, tools=[*self.tool_factory(workspace), *mcp],
+            llm=self.ordinary.llm, tools=[*tools, *mcp],
             max_context_tokens=self.ordinary.context.max_tokens,
             max_rounds=self.max_rounds,
             permission=Permission(
-                ask=self.ask, persist_path=self.manager.tasks_dir / f"{task.id}.permissions.json"
+                ask=self.strict_ask if sandbox else self.ask,
+                persist_path=None if sandbox else self.manager.tasks_dir / f"{task.id}.permissions.json",
+                allow_always=not bool(sandbox),
             ),
             hooks=task_hooks, workspace=workspace,
             rules=RuleLoader(
@@ -80,6 +94,7 @@ class TaskController:
         agent.messages = task.messages
         self.task, self.agent = task, agent
         self.trace = trace
+        self.sandbox = sandbox
         self._event("task_resumed" if resumed else "task_started")
         if mcp:
             self.console.print("[yellow]Note: external MCP tools are not isolated by Git Worktree.[/yellow]")
@@ -118,17 +133,29 @@ class TaskController:
         if action == "start" and value:
             if self.task:
                 raise RuntimeError("Leave the current task before starting another.")
-            task, untracked = self.manager.start(Path.cwd(), value, self.ordinary.llm.model)
+            sandboxed = value == "--sandbox" or value.startswith("--sandbox ")
+            requirement = value[len("--sandbox"):].strip() if sandboxed else value
+            if not requirement:
+                raise ValueError("Usage: /task start --sandbox <requirement>")
+            image = os.getenv("CORECODER_SANDBOX_IMAGE", "").strip() if sandboxed else ""
+            if sandboxed:
+                SandboxExecutor.preflight(image)
+            task, untracked = self.manager.start(Path.cwd(), requirement, self.ordinary.llm.model,
+                                                 sandbox_image=image)
             self._activate(task)
             self.console.print(f"[green]Task {task.id} started in {task.worktree}[/green]")
             if untracked:
                 self.console.print(f"[yellow]{len(untracked)} untracked file(s) were not copied into the worktree.[/yellow]")
-            self.console.print("[yellow]Worktree isolates Git files, not Shell or external MCP side effects.[/yellow]")
-            return value
+            if sandboxed:
+                self.console.print("[green]Sandbox mode: Shell and verification run in a local Docker image; MCP and hooks disabled.[/green]")
+                self.console.print("[yellow]Each sandbox command starts in the task directory; no network or host environment is passed.[/yellow]")
+            else:
+                self.console.print("[yellow]Worktree isolates Git files, not Shell or external MCP side effects.[/yellow]")
+            return requirement
         if action == "list":
             tasks = self.manager.list()
             for task in tasks:
-                self.console.print(f"{task.id}  {task.status:9}  {task.prompt[:70]}")
+                self.console.print(f"{task.id}  {task.status:9}  {'[sandbox] ' if task.sandbox_image else ''}{task.prompt[:70]}")
             if not tasks:
                 self.console.print("[dim]No tasks.[/dim]")
             return None
@@ -172,6 +199,7 @@ class TaskController:
                 if self.task and self.task.id == task.id:
                     self.task, self.agent = None, None
                     self.trace = None
+                    self.sandbox = None
                 self.console.print(f"[green]Discarded {task.id}.[/green]")
             return None
         if action == "leave" and not value:
@@ -182,6 +210,7 @@ class TaskController:
                 self.console.print(f"[dim]Left task {self.task.id}; worktree retained.[/dim]")
                 self.task, self.agent = None, None
                 self.trace = None
+                self.sandbox = None
             return None
         if not self.task:
             raise RuntimeError("No active task. Use /task start <requirement> or /task resume <id>.")
@@ -192,6 +221,7 @@ class TaskController:
                 f"Worktree: {self.task.worktree}\n"
                 f"Validation: {self.task.verify_status}"
                 + (" (current)" if current else " (stale or not passed)")
+                + f"\nExecution: {'sandbox (' + self.task.sandbox_image + ')' if self.sandbox else 'host'}"
             )
             self._show_results()
             return None
@@ -219,6 +249,7 @@ class TaskController:
                 self.console.print("[green]Applied to original project (uncommitted).[/green]")
                 self.task, self.agent = None, None
                 self.trace = None
+                self.sandbox = None
                 if task.learning_eligible and getattr(self.ordinary, "memory_store", None) is not None:
                     if self._confirm("Generate reviewable memory candidates with the model? [y/N] "):
                         try:
@@ -230,7 +261,7 @@ class TaskController:
                             )
             return None
         raise ValueError(
-            "Usage: /task start <requirement>|status|list|resume <id>|trace [id]|diff|verify|"
+            "Usage: /task start [--sandbox] <requirement>|status|list|resume <id>|trace [id]|diff|verify|"
             "apply [--force]|learn <id>|leave|discard <id>"
         )
 
@@ -248,7 +279,10 @@ class TaskController:
         task = self.task
         if self.verification_guard is not None:
             self.verification_guard(task, self.manager)
-        commands, command_digest = discover(Path(task.worktree), self.agent.workspace.cwd)
+        commands, command_digest = discover(
+            Path(task.worktree), self.agent.workspace.cwd,
+            target_platform="posix" if self.sandbox else None,
+        )
         if not commands:
             task.verify_status = "skipped"
             task.verify_results = []
@@ -274,7 +308,7 @@ class TaskController:
             self._event("verify_approval", outcome="allowed")
             task.approved_command_digest = command_digest
         before = self.manager.digest(task)
-        results = run(commands, Path(task.worktree))
+        results = run(commands, Path(task.worktree), executor=self.sandbox)
         after = self.manager.digest(task)
         task.verify_results = [result.to_dict() for result in results]
         task.verify_status = "passed" if results and all(result.kind == "passed" for result in results) else results[-1].kind

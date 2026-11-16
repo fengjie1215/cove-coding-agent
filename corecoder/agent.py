@@ -212,15 +212,19 @@ class Agent:
             blocked = self._pre_hooks(tc)
             if blocked:
                 result, outcome = blocked, "blocked_hook"
-                self._trace_event("tool_decision", tool=tc.name, outcome=outcome)
+                self._trace_event("tool_decision", tool=tc.name, outcome=outcome, reason="hook_blocked")
             else:
                 blocked = self._permit(tc)
                 if blocked is not None:
                     result = blocked
                     outcome = "blocked_plan" if self.plan_mode and tc.name not in Permission.READ_ONLY else "denied"
-                    self._trace_event("tool_decision", tool=tc.name, outcome=outcome)
+                    reason = "plan_mode" if outcome == "blocked_plan" else getattr(self.permission, "last_reason", None)
+                    self._trace_event("tool_decision", tool=tc.name, outcome=outcome, reason=reason)
                 else:
-                    self._trace_event("tool_decision", tool=tc.name, outcome="allowed")
+                    self._trace_event(
+                        "tool_decision", tool=tc.name, outcome="allowed",
+                        reason=getattr(self.permission, "last_reason", None),
+                    )
                     result = self._exec_tool(tc)
                     self._post_hooks(tc, result)
                     failed = result.startswith(("Error", "⚠ Blocked")) or (tc.name == "bash" and "[exit code:" in result)

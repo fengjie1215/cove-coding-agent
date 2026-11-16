@@ -52,6 +52,7 @@ class Task:
     verify_results: list[dict] = field(default_factory=list)
     learning_eligible: bool = False
     learning_digest: str = ""
+    sandbox_image: str = ""
 
     def save(self, directory: Path = TASKS_DIR):
         directory.mkdir(parents=True, exist_ok=True)
@@ -70,7 +71,7 @@ class TaskManager:
         self.tasks_dir = tasks_dir.resolve()
         self.worktrees_dir = worktrees_dir.resolve()
 
-    def start(self, cwd: Path, prompt: str, model: str) -> tuple[Task, list[str]]:
+    def start(self, cwd: Path, prompt: str, model: str, sandbox_image: str = "") -> tuple[Task, list[str]]:
         cwd = cwd.resolve()
         repo = Path(_git(cwd, "rev-parse", "--show-toplevel").stdout.decode().strip()).resolve()
         if _git(repo, "status", "--porcelain", "-uno").stdout:
@@ -83,7 +84,8 @@ class TaskManager:
         if path.exists():
             raise RuntimeError(f"Task path already exists: {path}")
         _git(repo, "worktree", "add", "--detach", str(path), sha)
-        task = Task(task_id, str(repo), str(path), sha, str(cwd.relative_to(repo)), prompt, model)
+        task = Task(task_id, str(repo), str(path), sha, str(cwd.relative_to(repo)), prompt, model,
+                    sandbox_image=sandbox_image)
         try:
             task.save(self.tasks_dir)
         except Exception:
@@ -127,7 +129,10 @@ class TaskManager:
             return False
         from .verify import discover
         try:
-            _, command_digest = discover(Path(task.worktree), Path(task.worktree) / task.relative_cwd)
+            _, command_digest = discover(
+                Path(task.worktree), Path(task.worktree) / task.relative_cwd,
+                target_platform="posix" if task.sandbox_image else None,
+            )
         except (OSError, ValueError, TypeError):
             return False
         return task.verified_command_digest == command_digest

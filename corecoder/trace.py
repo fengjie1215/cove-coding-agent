@@ -23,7 +23,12 @@ _EVENTS = frozenset({
     "verify_command", "verify_finished", "repair_started", "repair_stopped",
 })
 _COUNTS = frozenset({"round", "tool_count", "prompt_tokens", "completion_tokens", "attempt", "exit_code"})
-_TEXT = frozenset({"turn_id", "role", "tool", "outcome", "error_type"})
+_TEXT = frozenset({"turn_id", "role", "tool", "outcome", "error_type", "reason"})
+_REASONS = frozenset({
+    "read_only", "preapproved", "approved_once", "approved_always",
+    "approval_unavailable", "approval_denied", "persistent_not_allowed",
+    "hook_blocked", "plan_mode",
+})
 
 
 def tool_label(name: str) -> str:
@@ -71,6 +76,8 @@ class TaskTrace:
                     row[key] = value
                 elif key == "error_type" and _IDENTIFIER.fullmatch(value):
                     row[key] = value
+                elif key == "reason" and value in _REASONS:
+                    row[key] = value
             elif key == "diff_digest" and isinstance(value, str) and _SHA256.fullmatch(value):
                 row[key] = value
         line = json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n"
@@ -109,7 +116,7 @@ def describe(row: dict) -> str:
     """Render only recorder-approved metadata, never arbitrary JSON content."""
     event = row["event"]
     bits = [event]
-    for key in ("role", "round", "tool", "outcome", "attempt", "error_type",
+    for key in ("role", "round", "tool", "outcome", "reason", "attempt", "error_type",
                 "exit_code", "tool_count", "prompt_tokens", "completion_tokens", "seconds", "diff_digest"):
         if key in row:
             bits.append(f"{key}={row[key]}")

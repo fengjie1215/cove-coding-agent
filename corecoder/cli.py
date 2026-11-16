@@ -138,6 +138,16 @@ def _ask_permission(tool_name: str, arguments: dict) -> str:
     return "deny"
 
 
+def _ask_task_permission_once(tool_name: str, arguments: dict) -> str:
+    """Sandbox task grants never persist across calls or restarts."""
+    console.print(f"\n[bold yellow]sandbox permission requested:[/] [cyan]{tool_name}[/cyan]({_brief(arguments)})")
+    try:
+        answer = pt_prompt("  [y] allow this call  [n] deny: ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return "deny"
+    return "once" if answer in ("y", "yes") else "deny"
+
+
 def _run_once(agent: Agent, prompt: str):
     """Non-interactive: run one prompt and exit."""
     perm = agent.permission
@@ -190,7 +200,8 @@ def _repl(agent: Agent, config: Config):
 
     # Enter submits, Escape+Enter inserts a newline (for pasting code blocks etc.)
     kb = KeyBindings()
-    tasks = TaskController(agent, console, _ask_permission, pt_prompt)
+    tasks = TaskController(agent, console, _ask_permission, pt_prompt,
+                           strict_ask=_ask_task_permission_once)
 
     @kb.add("enter")
     def _submit(event):
@@ -461,7 +472,7 @@ def _show_help():
         "  /memory list [--project|--global]|show <id>|search <query>|why [id]|forget <id>\n"
         "  /memory candidates|accept <id> [edited text]|reject <id>|disable <id>\n"
         "  /diff          Show files modified this session\n"
-        "  /task start <requirement>  Start an isolated coding task\n"
+        "  /task start [--sandbox] <requirement>  Start an isolated coding task\n"
         "  /task status|list|resume <id>|trace [id]|diff|verify|apply [--force]|learn <id>|leave|discard <id>\n"
         "  /undo          Revert the most recent file change\n"
         "  /plan          Toggle plan mode: read-only, then a plan to approve\n"

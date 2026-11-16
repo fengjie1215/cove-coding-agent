@@ -26,10 +26,13 @@ class Permission:
 
     READ_ONLY = frozenset({"read_file", "glob", "grep", "todo_write"})
 
-    def __init__(self, ask=None, allow_all: bool = False, persist_path: Path | None = None):
+    def __init__(self, ask=None, allow_all: bool = False, persist_path: Path | None = None,
+                 allow_always: bool = True):
         # ask(tool_name, arguments) -> "once" | "always" | "deny"
         self.ask = ask
         self.allow_all = allow_all
+        self.allow_always = allow_always
+        self.last_reason: str | None = None
         self._always: set[str] = set()
         self._persist_path = persist_path
         if persist_path is not None:
@@ -42,9 +45,14 @@ class Permission:
     def check(self, tool_name: str, arguments: dict) -> str | None:
         """Decide one call. None lets it through; a string is the refusal
         the model receives as its tool result."""
-        if tool_name in self.READ_ONLY or self.allow_all or tool_name in self._always:
+        if tool_name in self.READ_ONLY:
+            self.last_reason = "read_only"
+            return None
+        if self.allow_all or tool_name in self._always:
+            self.last_reason = "preapproved"
             return None
         if self.ask is None:
+            self.last_reason = "approval_unavailable"
             return (
                 f"Permission denied: {tool_name} mutates state and this session is "
                 "non-interactive, so nobody can approve it. Rerun with --yes, or "
@@ -52,11 +60,17 @@ class Permission:
             )
         verdict = self.ask(tool_name, arguments)
         if verdict == "always":
+            if not self.allow_always:
+                self.last_reason = "persistent_not_allowed"
+                return "Permission denied: sandbox tasks require approval for each mutating call."
             self._always.add(tool_name)
             self._save()
+            self.last_reason = "approved_always"
             return None
         if verdict == "once":
+            self.last_reason = "approved_once"
             return None
+        self.last_reason = "approval_denied"
         return (
             f"Permission denied: the user refused this {tool_name} call. "
             "Do not retry it unchanged; ask what they would prefer instead."
